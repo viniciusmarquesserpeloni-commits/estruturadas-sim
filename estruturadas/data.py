@@ -181,7 +181,7 @@ def cdi_factor_on_index(index: pd.DatetimeIndex, cdi_daily: pd.Series | None,
         rates = np.full(len(index), fallback_daily)
     else:
         rates = cdi_daily.reindex(index.union(cdi_daily.index)).ffill().reindex(index)
-        rates = rates.fillna(fallback_daily).to_numpy()
+        rates = rates.fillna(fallback_daily).to_numpy(dtype=float, copy=True)
     rates[0] = 0.0  # o primeiro pregão é a base
     return np.cumprod(1 + rates)
 
