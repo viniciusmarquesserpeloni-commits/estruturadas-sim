@@ -131,7 +131,7 @@ class Structure:
         return sorted({leg.strike for leg in self.option_legs if leg.strike is not None})
 
     def copy(self, **changes) -> "Structure":
-        legs = [replace(leg) for leg in self.legs]
+        legs = [replace(leg) for leg in changes.pop("legs", self.legs)]
         return replace(self, legs=legs, params=dict(self.params), **changes)
 
 
