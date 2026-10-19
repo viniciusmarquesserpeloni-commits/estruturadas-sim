@@ -44,8 +44,10 @@
     return out;
   };
   E.structure = function (name, legs, extra = {}) {
-    return Object.assign({ name, legs: legs.map(E.normalizeLeg), ticker: null, trade_date: null, expiry_date: null,
-      option_cost: 0, preset: null, notes: "" }, extra);
+    const out = Object.assign({ ticker: null, trade_date: null, expiry_date: null, option_cost: 0, preset: null, notes: "" }, extra);
+    out.name = name;
+    out.legs = legs.map(E.normalizeLeg);
+    return out;
   };
   E.copyStructure = (s, changes = {}) => Object.assign({}, s, { legs: s.legs.map((l) => Object.assign({}, l)) }, changes);
 

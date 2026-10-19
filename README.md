@@ -8,6 +8,8 @@ O app "fala a língua" das lâminas de operações estruturadas das corretoras: 
 inicial, tipo de barreira Knock Up/Down and In/Out e proporção), e os resultados aparecem também no formato
 **Quadro de rentabilidade no vencimento**.
 
+**Acesse o simulador:** https://viniciusmarquesserpeloni-commits.github.io/estruturadas-sim/
+
 > ⚠️ Ferramenta **educacional**. Não é recomendação de investimento. Passado não garante futuro.
 > Retornos **brutos de IR**. O projeto não é afiliado a nenhuma instituição financeira.
 
@@ -28,7 +30,42 @@ inicial, tipo de barreira Knock Up/Down and In/Out e proporção), e os resultad
   (Black-Scholes para vanilla e Monte Carlo neutro ao risco para barreiras), com **solver de custo zero**.
 - Download dos resultados em CSV (formato brasileiro, `;` e vírgula decimal) e da estrutura em JSON.
 
-## Como rodar
+## Duas versões
+
+| | Site público (GitHub Pages) | App Streamlit |
+|---|---|---|
+| Onde | [`site/`](site/) — HTML/JS estático, mesmo layout do painel "Relatório de Fundos" | [`app.py`](app.py) |
+| Motor | JavaScript ([`site/assets/js/engine/`](site/assets/js/engine/)), validado contra o Python | Python ([`estruturadas/`](estruturadas/)) |
+| Ações | ~95 ações líquidas da B3 (lista em [`scripts/tickers.py`](scripts/tickers.py)) + upload de CSV | qualquer ticker do Yahoo Finance |
+| Dados | atualizados todo dia útil às 19h30 (GitHub Actions) | baixados na hora |
+
+As duas usam a mesma metodologia. Os testes em [`tests/js/`](tests/js/) comparam o motor JS com
+resultados gerados pelo motor Python ([`scripts/make_js_fixtures.py`](scripts/make_js_fixtures.py)):
+payoffs de todos os presets, Black-Scholes, backtest histórico, ex-post, quadro de rentabilidade e calendário.
+
+### Site estático: como funciona a publicação
+
+O workflow [`.github/workflows/pages.yml`](.github/workflows/pages.yml) roda a cada push na `main`, em dias
+úteis às 19h30 (Brasília) e sob demanda (*Actions → Site (GitHub Pages) → Run workflow*). Ele:
+
+1. roda os testes Python (`pytest`) e JS (`node --test tests/js/engine.test.mjs`);
+2. gera `site/data/` com `python scripts/build_site_data.py` (preços do Yahoo Finance, CDI e Selic do BCB);
+3. publica a pasta `site/` no GitHub Pages.
+
+Se algum passo falhar, a versão anterior do site continua no ar. Pré-requisito (uma vez só): em
+*Settings → Pages*, escolher **Source: GitHub Actions**. O GitHub pausa agendamentos após 60 dias sem
+atividade no repositório; nesse caso, basta reativar o workflow na aba *Actions*.
+
+Para testar o site localmente:
+
+```bash
+python scripts/build_site_data.py PETR4 VALE3 BBDC4
+python -m http.server 8000 --directory site
+```
+
+e abra http://localhost:8000. Para incluir uma ação, acrescente-a em `scripts/tickers.py`.
+
+## Como rodar o app Streamlit
 
 Requer Python 3.11 ou mais recente.
 
@@ -165,6 +202,13 @@ Formato do JSON (strikes e barreiras em fração do valor inicial):
 ## Estrutura do repositório
 
 ```
+site/                   # site estático (GitHub Pages)
+  index.html            # mesmo layout do painel "Relatório de Fundos"
+  assets/js/engine/     # motor em JS (payoff, precificação, backtest, métricas, calendário)
+  assets/js/views/      # páginas: Estrutura, Backtest, Monte Carlo, Ex-post, Metodologia
+  assets/js/worker.js   # cálculos pesados em Web Worker
+scripts/                # build_site_data.py, tickers.py, make_js_fixtures.py
+.github/workflows/      # publicação diária no GitHub Pages
 app.py                  # interface Streamlit
 METODOLOGIA.md          # texto da aba "Metodologia e limitações"
 estruturadas/
@@ -178,7 +222,7 @@ estruturadas/
   charts.py             # gráficos Plotly (pt-BR)
   formatting.py         # números no formato brasileiro
 presets/                # lâminas de exemplo em JSON
-tests/                  # pytest
+tests/                  # pytest (Python) e tests/js (motor JS × Python)
 ```
 
 ## Premissas e limitações

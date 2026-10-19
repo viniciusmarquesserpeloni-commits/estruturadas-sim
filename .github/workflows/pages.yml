@@ -1,0 +1,68 @@
+# Publica o site estático (site/) no GitHub Pages com dados atualizados.
+# Roda a cada push na main, em dias úteis às 19h30 (Brasília) e sob demanda.
+# Se os testes ou o download de dados falharem, a versão anterior do site continua no ar.
+name: Site (GitHub Pages)
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Testes do motor Python
+        run: pytest -q
+
+      - name: Testes do motor JS (comparados ao Python)
+        run: node --test tests/js/engine.test.mjs
+
+      - name: Baixar preços e CDI/Selic
+        run: python scripts/build_site_data.py
+
+      - name: Versionar arquivos (evita cache antigo no navegador)
+        run: |
+          sed -i "s/__V__/${GITHUB_SHA::8}-$(date -u +%Y%m%d%H%M)/g" site/index.html
+          touch site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
