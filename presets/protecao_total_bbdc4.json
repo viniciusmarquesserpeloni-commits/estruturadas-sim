@@ -1,0 +1,41 @@
+{
+  "formato": "estruturadas-sim/v1",
+  "nome": "Proteção Total (BBDC4)",
+  "ticker": "BBDC4",
+  "data_contratacao": "2025-11-19",
+  "data_vencimento": "2026-11-25",
+  "custo_opcoes": 0.0,
+  "preset": "protecao_total",
+  "observacoes": "Exemplo da lâmina de 19/11/2025. Custo das opções = 0 (estrutura sem custo).",
+  "pernas": [
+    {
+      "tipo": "stock",
+      "posicao": "comprada",
+      "proporcao": 1.0
+    },
+    {
+      "tipo": "put",
+      "posicao": "comprada",
+      "proporcao": 1.0,
+      "strike": 1.041,
+      "barreira_tipo": "none",
+      "barreira": null
+    },
+    {
+      "tipo": "call",
+      "posicao": "vendida",
+      "proporcao": 1.0,
+      "strike": 1.041,
+      "barreira_tipo": "up_in",
+      "barreira": 1.381
+    },
+    {
+      "tipo": "call",
+      "posicao": "comprada",
+      "proporcao": 0.5,
+      "strike": 1.0,
+      "barreira_tipo": "up_out",
+      "barreira": 1.381
+    }
+  ]
+}
