@@ -20,3 +20,6 @@ Thumbs.db
 # Dados locais
 *.log
 data_cache/
+
+# Dados gerados do site (publicados pelo GitHub Actions)
+site/data/
