@@ -51,6 +51,62 @@
     return null;
   };
 
+  /* ---------------- Saída antecipada (compartilhado com a página de Monte Carlo) ---------------- */
+  UI.exitPremises = (cfg) => `Desmontagem ${cfg.delay === 0 ? "no próprio dia do gatilho" : `${cfg.delay} pregão(ões) após o gatilho (OK do investidor)`}, pelo valor daquele dia ·
+    spread de saída ${F.pct(cfg.exitSpread, 2, false)} · ${cfg.minDays ? `carência de ${cfg.minDays} pregões · ` : ""}marcação: ${cfg.volMode === "fixed" ? "vol da contratação" : "vol realizada de 63 pregões"} + ${F.num(cfg.volAdd * 100, 1)} pts, ${cfg.calibrate ? "calibrada ao preço pago na contratação" : "modelo puro (sem calibração)"}.`;
+  /* kind = "hist" | "mc": o bloco mostra os dois métodos na tabela e destaca o da página. */
+  UI.exitBlock = function (ctx, kind) {
+    const st = App.state, cfg = ctx.exitCfg || App.exitCfg(st);
+    const title = `<div class="section-title">Saída antecipada — gatilho de ${F.num(cfg.trigger * 100, 0)}% do CDI</div>`;
+    if (!st.adv.exitOn) return title + `<div class="card"><div class="card-b small muted">Simulação de saída antecipada desativada em <b>Mais opções → Saída antecipada</b>.</div></div>`;
+    if (ctx.exitError) return title + `<div class="err-note">${esc(ctx.exitError)}</div>`;
+    const res = kind === "hist" ? ctx.hexit : ctx.mcexit;
+    if (!res) return title + `<div class="card"><div class="loading">Marcando a estrutura dia a dia em cada ${kind === "hist" ? "janela" : "caminho"}…</div></div>`;
+    const sm = E.summarizeExit(res), base = E.summarize(kind === "hist" ? ctx.hist : ctx.mc);
+    const days = isFinite(sm.dias_mediana) ? `${F.int(sm.dias_mediana)} pregões` : "—";
+    const cols = {};
+    if (ctx.hexit) cols["Histórico"] = E.summarizeExit(ctx.hexit);
+    if (ctx.mcexit) cols[`Monte Carlo (${F.int(ctx.mcexit.n)} caminhos)`] = E.summarizeExit(ctx.mcexit);
+    const names = Object.keys(cols), sums = Object.values(cols);
+    const table = `<div style="overflow-x:auto"><table class="compact"><thead><tr><th>Com saída antecipada</th>${names.map((n) => `<th>${esc(n)}</th>`).join("")}</tr></thead><tbody>
+      ${E.EXIT_ROWS.map(([k, label, kind2]) => `<tr><td style="white-space:normal">${label}</td>${sums.map((s) => `<td>${!isFinite(s[k]) ? "—" : kind2 === "int" ? F.int(s[k]) : F.pct(s[k], 2, false)}</td>`).join("")}</tr>`).join("")}
+      </tbody></table></div>`;
+    let regimes = "";
+    if (kind === "hist") {
+      const rows = E.exitByCdiRegime(res), cur = ctx.rateAnnual;
+      regimes = `<div class="card" style="margin-top:16px"><div class="card-h"><h3>Saída antecipada por nível de juros no início da janela</h3><span class="sub">CDI atual: ${F.pct(cur, 2, false)} a.a.</span></div>
+        <div class="card-b"><div style="overflow-x:auto"><table class="compact"><thead><tr><th>Juros no início</th><th>Janelas</th><th>P(saída antecipada)</th><th>Dia mediano da saída</th><th>P(&gt; CDI) com saída</th><th>Retorno médio com saída</th><th>Retorno médio no vencimento</th></tr></thead><tbody>
+        ${rows.map((r) => { const [lo, hi] = E.CDI_REGIMES.find((x) => x[2] === r.label); const now = cur > lo && cur <= hi;
+          return `<tr${now ? ' style="background:var(--lime-soft)"' : ""}><td>${esc(r.label)}${now ? " <b>(atual)</b>" : ""}</td><td>${F.int(r.n)}</td><td>${F.pct(r.pSaida, 1, false)}</td><td>${isFinite(r.diaMediano) ? F.int(r.diaMediano) : "—"}</td><td>${F.pct(r.pCdi, 1, false)}</td><td>${App.signed(r.media)}</td><td>${App.signed(r.mediaVenc)}</td></tr>`; }).join("")}
+        </tbody></table></div></div>
+        <div class="card-note">Com juros altos, a parte "renda fixa" da estrutura vale menos e a régua de ${F.num(cfg.trigger * 100, 0)}% do CDI sobe mais rápido: a saída antecipada fica mais rara e mais tardia. A linha destacada é a mais parecida com o cenário atual.</div></div>`;
+    }
+    return title + `
+      <div class="card kpi-strip">
+        ${UI.kpi("P(saída antecipada)", F.pct(sm.p_saida, 1, false), `gatilho atingido em ${F.pct(sm.p_gatilho, 1, false)}`)}
+        ${UI.kpi("Dia mediano da saída", days, isFinite(sm.dias_p25) ? `metade entre ${F.int(sm.dias_p25)} e ${F.int(sm.dias_p75)}` : "nenhuma saída")}
+        ${UI.kpi("Retorno médio com saída", App.signed(sm.media), `no vencimento: ${F.pct(sm.media_venc)}`)}
+        ${UI.kpi("P(&gt; CDI) com saída", F.pct(sm.p_cdi, 1, false), `no vencimento: ${F.pct(base.p_cdi, 1, false)}`)}
+        ${UI.kpi("% do CDI mediano", F.pct(sm.pct_cdi_mediana, 0, false), "do período efetivamente investido")}
+        ${UI.kpi("Retorno anualizado mediano", App.signed(sm.anual_mediana), `prazo médio ${F.int(sm.dias_medio)} pregões`)}
+      </div>
+      <div class="grid g-2" style="margin-top:16px">
+        <div class="card"><div class="card-h"><h3>Quando acontece a saída</h3><span class="sub">fração das ${kind === "hist" ? "janelas" : "simulações"} por mês da operação</span></div>
+          <div class="card-b"><div class="chart" id="${kind}-exitdays"></div></div>
+          <div class="card-note">${UI.exitPremises(cfg)}</div></div>
+        <div class="card"><div class="card-h"><h3>Métricas com saída antecipada</h3><span class="sub">histórico × Monte Carlo</span></div><div class="card-b">${table}</div>
+          <div class="card-note">Retornos comparados ao CDI do período em que o dinheiro ficou de fato na estrutura. Monte Carlo: marcação com vol e CDI constantes nos primeiros ${F.int(E.EXIT_PATHS)} caminhos.</div></div>
+      </div>${regimes}`;
+  };
+  UI.mountExit = function (rootEl, ctx, kind) {
+    const el = rootEl.querySelector(`#${kind}-exitdays`);
+    if (!el) return;
+    const sets = [];
+    if (ctx.hexit) sets.push({ name: "Histórico", color: CH().COLORS.BLUE, res: ctx.hexit });
+    if (ctx.mcexit) sets.push({ name: "Monte Carlo", color: CH().COLORS.ORANGE, res: ctx.mcexit });
+    CH().exitDays(el, sets, (ctx.hexit || ctx.mcexit).N);
+  };
+
   /* ---------------- Página ---------------- */
   let root = null, winIdx = null;
   const alive = () => root && document.body.contains(root);
@@ -80,7 +136,9 @@
           <div class="card-note">${ctx.mc ? "" : "Monte Carlo ainda em cálculo. "}Linha do CDI = CDI médio das janelas históricas.</div></div>
         <div class="card"><div class="card-h"><h3>Métricas: histórico × Monte Carlo</h3></div><div class="card-b">${UI.sideBySide(ctx)}</div></div>
       </div>
-      <div class="card" style="margin-top:16px"><div class="card-h"><h3>Preço da ação e janela em destaque</h3><span class="sub">padrão: a pior janela</span></div>
+      ${UI.exitBlock(ctx, "hist")}
+      <div class="section-title">Janela em destaque</div>
+      <div class="card"><div class="card-h"><h3>Preço da ação e janela em destaque</h3><span class="sub">padrão: a pior janela</span></div>
         <div class="card-b">
           <div class="range-row"><input type="range" id="b-win" min="0" max="${res.ret.length - 1}" value="${winIdx}" aria-label="Janela (data de início)"><span id="b-win-txt" class="small"></span></div>
           <div class="chart" id="b-price" style="margin-top:8px"></div>
@@ -89,6 +147,7 @@
     const sets = [{ name: "Janelas históricas", color: CH().COLORS.BLUE, values: res.ret }];
     if (ctx.mc) sets.push({ name: "Monte Carlo", color: CH().COLORS.ORANGE, values: ctx.mc.ret });
     CH().histogram(root.querySelector("#b-hist"), sets, sm.cdi_medio);
+    UI.mountExit(root, ctx, "hist");
     const showWin = () => {
       const i = winIdx;
       root.querySelector("#b-win-txt").innerHTML = `${F.date(res.start[i])} → ${F.date(res.end[i])}: estrutura ${App.signed(res.ret[i])} (${F.brl(st.invested * res.ret[i])}) · ação ${F.pct(res.stock[i])} · barreira ${res.anyHit[i] ? "acionada" : "não acionada"}`;

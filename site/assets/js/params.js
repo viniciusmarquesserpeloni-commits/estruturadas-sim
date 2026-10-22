@@ -81,6 +81,17 @@
         <label class="fl">Seed <input class="input num" id="a-seed" value="${adv.mcSeed}" inputmode="numeric"></label>
         <button class="btn ghost sm" type="button" id="a-reset" style="padding-left:0">Restaurar todos os padrões</button>
       </div>
+      <div class="f-group"><span class="f-label">Saída antecipada</span>
+        <label class="fl">Simular ${sel("x-on", [["1", "Sim"], ["0", "Não"]], adv.exitOn ? 1 : 0)}</label>
+        <label class="fl">Gatilho (% do CDI) <input class="input num" id="x-trig" value="${F.num(adv.exitTrigger * 100, 0)}" inputmode="decimal"></label>
+        <label class="fl">Spread de saída (% do valor inicial) <input class="input num" id="x-spread" value="${pctIn(adv.exitSpread)}" inputmode="decimal"></label>
+        <label class="fl">Pregões até desmontar (OK do investidor) <input class="input num" id="x-delay" value="${adv.exitDelay}" inputmode="numeric"></label>
+        <label class="fl">Carência (pregões) <input class="input num" id="x-min" value="${adv.exitMinDays}" inputmode="numeric"></label>
+        <label class="fl">Vol da marcação ${sel("x-vol", [["rolling", "Móvel 63d + adicional"], ["fixed", "Da contratação (fixa)"]], adv.exitVolMode)}</label>
+        <label class="fl">Adicional de vol (pontos) <input class="input num" id="x-voladd" value="${F.num(adv.exitVolAdd * 100, 1)}" inputmode="decimal"></label>
+        <label class="fl">Calibrar ao preço pago ${sel("x-cal", [["1", "Sim"], ["0", "Não (modelo puro)"]], adv.exitCalibrate ? 1 : 0)}</label>
+        <div class="hint">Desmonta quando o retorno acumulado, já descontado o spread, passa do gatilho; a marcação usa Black-Scholes e fórmulas de barreira.</div>
+      </div>
     </div>`;
   }
 
@@ -154,6 +165,15 @@
     if ($("a-block")) $("a-block").addEventListener("change", (e) => { const v = App.parseNum(e.target.value); if (v >= 1) setAdv({ mcBlock: Math.round(v) }); });
     $("a-mcp").addEventListener("change", (e) => setAdv({ mcPaths: +e.target.value }));
     $("a-seed").addEventListener("change", (e) => { const v = App.parseNum(e.target.value); if (v != null) setAdv({ mcSeed: Math.round(v) }); });
+    const intIn = (id, key, min) => $(id).addEventListener("change", (e) => { const v = App.parseNum(e.target.value); if (v != null && v >= min) setAdv({ [key]: Math.round(v) }); });
+    $("x-on").addEventListener("change", (e) => setAdv({ exitOn: e.target.value === "1" }));
+    $("x-trig").addEventListener("change", (e) => { const v = App.parseNum(e.target.value); if (v > 0) setAdv({ exitTrigger: v / 100 }); });
+    $("x-spread").addEventListener("change", (e) => setAdv({ exitSpread: optPct(e.target.value) || 0 }));
+    intIn("x-delay", "exitDelay", 0);
+    intIn("x-min", "exitMinDays", 0);
+    $("x-vol").addEventListener("change", (e) => setAdv({ exitVolMode: e.target.value }));
+    $("x-voladd").addEventListener("change", (e) => setAdv({ exitVolAdd: optPct(e.target.value) || 0 }));
+    $("x-cal").addEventListener("change", (e) => setAdv({ exitCalibrate: e.target.value === "1" }));
     $("a-reset").addEventListener("click", () => { if (confirm("Restaurar todos os parâmetros e a estrutura padrão (Proteção Total BBDC4)?")) { App.csv = null; App.reset(); } });
     $("a-csv").addEventListener("change", async (e) => {
       const f = e.target.files[0]; if (!f) return;

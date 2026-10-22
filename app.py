@@ -15,10 +15,13 @@ from estruturadas import charts, data
 from estruturadas import io as sio
 from estruturadas import presets
 from estruturadas.backtest import DRIFT_LABELS, MC_METHOD_LABELS, run_ex_post, run_historical, run_monte_carlo
+from estruturadas.early_exit import (VOL_MODE_LABELS, EarlyExitConfig, run_ex_post_exit, run_historical_exit,
+                                     run_mc_exit)
 from estruturadas.formatting import fmt_brl, fmt_level, fmt_num, fmt_pct
 from estruturadas.legs import (BARRIER_LABELS, KIND_LABELS, MONITORING_LABELS, Leg, Structure, has_errors,
                                payoff_profile_summary, validate)
-from estruturadas.metrics import comparison_table, default_variations, profitability_table, summarize
+from estruturadas.metrics import (comparison_table, default_variations, exit_by_cdi_regime, exit_table,
+                                  profitability_table, summarize, summarize_exit)
 from estruturadas.pricing import (PARAM_LABELS, PARAMS, annual_to_continuous, default_bounds, price_structure,
                                   solve_zero_cost)
 
@@ -82,6 +85,20 @@ def cached_mc(struct_json: str, prices: pd.DataFrame, n_days: int, cost: float, 
               block: int, drift: str, cdi_annual: float, seed: int, monitoring: str, extra_cost: float):
     return run_monte_carlo(sio.loads(struct_json), prices, n_days, cost, method, n_paths, block, drift,
                            cdi_annual, seed, monitoring, extra_cost)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_hexit(struct_json: str, prices: pd.DataFrame, n_days: int, cost: float, cfg: dict, cdi_factor: np.ndarray,
+                 ret_hold: np.ndarray, monitoring: str, extra_cost: float):
+    return run_historical_exit(sio.loads(struct_json), prices, n_days, cost, EarlyExitConfig(**cfg), cdi_factor,
+                               ret_hold, monitoring, extra_cost)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_mcexit(struct_json: str, paths: np.ndarray, n_days: int, cost: float, cfg: dict, ret_hold: np.ndarray,
+                  sigma: float, cdi_annual: float, monitoring: str, extra_cost: float):
+    return run_mc_exit(sio.loads(struct_json), paths, n_days, cost, EarlyExitConfig(**cfg), ret_hold, sigma, cdi_annual,
+                       monitoring, extra_cost)
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +314,28 @@ mc_block = sb.slider("Tamanho do bloco (dias)", 1, 120, 20) if mc_method == "boo
 mc_paths = sb.select_slider("Nº de caminhos", [1_000, 5_000, 10_000, 20_000, 50_000], value=10_000)
 mc_seed = sb.number_input("Seed", value=42, step=1)
 
+sb.header("7. Saída antecipada")
+exit_on = sb.toggle("Simular saída antecipada", value=True,
+                    help="Desmontagem antes do vencimento quando a estrutura rende acima do gatilho (% do CDI).")
+exit_cfg = None
+if exit_on:
+    x1, x2 = sb.columns(2)
+    exit_trigger = x1.number_input("Gatilho (% do CDI)", min_value=1.0, value=150.0, step=10.0)
+    exit_spread = x2.number_input("Spread de saída (%)", min_value=0.0, value=1.0, step=0.25,
+                                  help="Desconto sobre a marcação na desmontagem, em % do valor inicial (estimativa).")
+    x3, x4 = sb.columns(2)
+    exit_delay = x3.number_input("Pregões até desmontar", min_value=0, value=1, step=1,
+                                 help="Tempo até o OK do investidor; a desmontagem usa o valor desse dia.")
+    exit_min = x4.number_input("Carência (pregões)", min_value=0, value=0, step=1)
+    exit_vol_mode = sb.selectbox("Vol da marcação", list(VOL_MODE_LABELS), format_func=VOL_MODE_LABELS.get)
+    exit_vol_add = sb.number_input("Adicional de vol (pontos)", min_value=0.0, value=3.0, step=0.5)
+    exit_calibrate = sb.checkbox("Calibrar ao preço pago na contratação", value=True,
+                                 help="Soma à marcação a diferença entre o preço pago e o modelo no dia 0, "
+                                      "amortizada até o vencimento.")
+    exit_cfg = dict(trigger=exit_trigger / 100, exit_spread=exit_spread / 100, delay=int(exit_delay),
+                    min_days=int(exit_min), vol_mode=exit_vol_mode, vol_add=exit_vol_add / 100,
+                    calibrate=bool(exit_calibrate))
+
 
 # ---------------------------------------------------------------------------
 # Corpo
@@ -466,7 +505,8 @@ with tab_struct:
                            file_name=f"{structure.name.lower().replace(' ', '_')}.json", mime="application/json")
 
 # ----------------------------- Backtests -----------------------------------
-hist_res = mc_res = None
+hist_res = mc_res = hexit_res = mcexit_res = None
+cdi_factor = None
 run_err = None
 if ready:
     try:
@@ -477,6 +517,15 @@ if ready:
                 hist_res = cached_historical(struct_json, prices, n_days, cost, monitoring, extra_cost, cdi_factor)
             mc_res = cached_mc(struct_json, prices, n_days, cost, mc_method, int(mc_paths), int(mc_block), mc_drift,
                                rate_annual, int(mc_seed), monitoring, extra_cost)
+        if exit_cfg is not None:
+            with st.spinner("Marcando a estrutura dia a dia (saída antecipada)…"):
+                if hist_res is not None:
+                    hexit_res = cached_hexit(struct_json, prices, n_days, cost, exit_cfg, cdi_factor,
+                                             hist_res.df["retorno"].to_numpy(), monitoring, extra_cost)
+                if mc_res is not None:
+                    mcexit_res = cached_mcexit(struct_json, mc_res.meta["paths_exit"], n_days, cost, exit_cfg,
+                                               mc_res.df["retorno"].to_numpy(), mc_res.meta["sigma"], rate_annual,
+                                               monitoring, extra_cost)
     except Exception as exc:  # noqa: BLE001
         run_err = str(exc)
 
@@ -512,6 +561,52 @@ def _side_by_side() -> pd.DataFrame:
     return comparison_table(sums)
 
 
+def _exit_section(kind: str) -> None:
+    """Saída antecipada: indicadores, distribuição do dia de saída, tabela e quebra por nível de CDI."""
+    st.markdown(f"#### Saída antecipada — gatilho de {fmt_num(exit_cfg['trigger'] * 100, 0)}% do CDI"
+                if exit_cfg else "#### Saída antecipada")
+    if exit_cfg is None:
+        st.caption("Desativada na barra lateral (7. Saída antecipada).")
+        return
+    res = hexit_res if kind == "hist" else mcexit_res
+    base = hist_res if kind == "hist" else mc_res
+    if res is None or base is None:
+        return
+    sm, bs = summarize_exit(res), summarize(base)
+    k = st.columns(5)
+    k[0].metric("P(saída antecipada)", fmt_pct(sm["p_saida"], 1), help=f"Gatilho atingido em {fmt_pct(sm['p_gatilho'], 1)}")
+    k[1].metric("Dia mediano da saída", "—" if np.isnan(sm["dias_mediana"]) else f"{sm['dias_mediana']:.0f} pregões")
+    k[2].metric("Retorno médio com saída", fmt_pct(sm["media"]), help=f"No vencimento: {fmt_pct(sm['media_venc'])}")
+    k[3].metric("P(> CDI) com saída", fmt_pct(sm["p_cdi"], 1), help=f"No vencimento: {fmt_pct(bs['p_cdi'], 1)}")
+    k[4].metric("% do CDI mediano", fmt_pct(sm["pct_cdi_mediana"], 0), help="Do período efetivamente investido")
+    sums = {}
+    if hexit_res is not None:
+        sums["Histórico"] = summarize_exit(hexit_res)
+    if mcexit_res is not None:
+        sums[f"Monte Carlo ({len(mcexit_res.df)} caminhos)"] = summarize_exit(mcexit_res)
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(charts.exit_days_chart({**({"Histórico": hexit_res} if hexit_res is not None else {}),
+                                            **({"Monte Carlo": mcexit_res} if mcexit_res is not None else {})}, n_days),
+                    key=f"exitdays_{kind}")
+    c2.dataframe(exit_table(sums), key=f"exittable_{kind}")
+    st.caption(f"Desmontagem {exit_cfg['delay']} pregão(ões) após o gatilho, spread de saída "
+               f"{fmt_pct(exit_cfg['exit_spread'])}, marcação com {VOL_MODE_LABELS[exit_cfg['vol_mode']].lower()} "
+               f"({fmt_num(exit_cfg['vol_add'] * 100, 1)} pts), "
+               + ("calibrada ao preço pago." if exit_cfg["calibrate"] else "sem calibração (modelo puro).")
+               + " Retornos comparados ao CDI do período efetivamente investido.")
+    if kind == "hist":
+        reg = exit_by_cdi_regime(res)
+        if not reg.empty:
+            shown = reg.copy()
+            for c in ("P(saída antecipada)", "P(> CDI) com saída", "Retorno médio com saída", "Retorno médio no vencimento"):
+                shown[c] = shown[c].map(lambda v: fmt_pct(v, 1))
+            shown["Dia mediano da saída"] = shown["Dia mediano da saída"].map(lambda v: "—" if np.isnan(v) else f"{v:.0f}")
+            st.markdown(f"**Por nível de juros no início da janela** (CDI atual: {fmt_pct(rate_annual)} a.a.)")
+            st.dataframe(shown, hide_index=True)
+            st.caption("Com juros altos, a parte de renda fixa da estrutura vale menos e a régua de % do CDI sobe mais "
+                       "rápido: a saída antecipada fica mais rara e mais tardia.")
+
+
 def _csv(df: pd.DataFrame) -> bytes:
     return df.to_csv(sep=";", decimal=",", index=False, date_format="%d/%m/%Y").encode("utf-8-sig")
 
@@ -538,6 +633,7 @@ with tab_hist:
             st.caption("Linha do CDI = CDI médio das janelas históricas.")
             st.markdown("#### Métricas: histórico × Monte Carlo")
             st.dataframe(_side_by_side())
+            _exit_section("hist")
 
             st.markdown("#### Preço da ação e janela em destaque")
             starts = hist_res.df["data_inicio"]
@@ -574,6 +670,7 @@ with tab_mc:
         st.caption(f"CDI do período no MC: taxa de {fmt_pct(rate_annual)} a.a. composta por {n_days} pregões.")
         st.markdown("#### Métricas: histórico × Monte Carlo")
         st.dataframe(_side_by_side())
+        _exit_section("mc")
         out = mc_res.df.copy()
         out["resultado_rs"] = invested * out["retorno"]
         st.download_button("⬇️ Baixar caminhos simulados (CSV)", _csv(out), file_name=f"monte_carlo_{ticker}.csv",
@@ -624,6 +721,28 @@ with tab_ex:
                        "Com preço ajustado, valores em R\\$ podem diferir dos da lâmina, mas as variações "
                        "percentuais são comparáveis.")
             st.plotly_chart(charts.ex_post_chart(ex, structure, ticker))
+            if exit_cfg is not None:
+                st.markdown(f"#### Saída antecipada — gatilho de {fmt_num(exit_cfg['trigger'] * 100, 0)}% do CDI")
+                cf_ex = cdi_factor if cdi_factor is not None else data.cdi_factor_on_index(
+                    prices.index, cached_cdi(prices.index[0].date(), prices.index[-1].date()), rate_annual)
+                n_total, _obs = data.term_from_dates(ex.trade_date, ex.expiry_date, prices.index)
+                xx = run_ex_post_exit(structure, prices, ex.trade_date, n_total, cost, EarlyExitConfig(**exit_cfg),
+                                      cf_ex, monitoring, extra_cost)
+                if xx is not None:
+                    live = np.flatnonzero(np.isfinite(xx.ret))
+                    if xx.exit_date is not None:
+                        st.success(f"Gatilho atingido em {xx.trigger_date:%d/%m/%Y}; com o OK do investidor, desmontagem "
+                                   f"em {xx.exit_date:%d/%m/%Y} com retorno de **{fmt_pct(xx.exit_return)}** "
+                                   f"({md_brl(invested * xx.exit_return)}).")
+                    elif xx.trigger_date is not None:
+                        st.info(f"Gatilho atingido em {xx.trigger_date:%d/%m/%Y}; desmontagem ainda não concluída.")
+                    elif len(live):
+                        j = live[-1]
+                        st.warning(f"Gatilho ainda não atingido. Em {xx.dates[j]:%d/%m/%Y}: retorno de saída estimado de "
+                                   f"**{fmt_pct(xx.ret[j])}** contra gatilho de **{fmt_pct(xx.threshold[j])}**.")
+                    st.plotly_chart(charts.ex_post_exit_chart(xx, exit_cfg["trigger"]))
+                    st.caption("Marcação a modelo (Black-Scholes e fórmulas de barreira): estimativa do valor de "
+                               "desmontagem; o preço efetivo é o da mesa.")
 
 with tab_method:
     st.markdown(METODOLOGIA)

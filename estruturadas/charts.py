@@ -206,3 +206,39 @@ def mc_paths_chart(res: BacktestResult, structure: Structure, n_show: int = 100)
             "Pregões desde a contratação", "Nível (% do valor inicial)", hovermode=False, showlegend=False)
     fig.update_yaxes(tickformat=".0%")
     return fig
+
+
+def exit_days_chart(results: dict, n_days: int) -> go.Figure:
+    """Saída antecipada: fração das janelas/caminhos desmontados em cada mês (21 pregões) da operação."""
+    colors = [BLUE, ORANGE]
+    fig = go.Figure()
+    nb = int(np.ceil(n_days / 21))
+    labels = [f"{i + 1}º mês" for i in range(nb)]
+    for (name, res), color in zip(results.items(), colors):
+        df = res.df
+        days = df.loc[df["saida_antecipada"], "dia_saida"].to_numpy()
+        counts = np.bincount(np.minimum((days - 1) // 21, nb - 1), minlength=nb) / max(len(df), 1)
+        fig.add_trace(go.Bar(x=labels, y=counts, name=name, marker_color=color,
+                             hovertemplate="%{x}: %{y:.1%}<extra>" + name + "</extra>"))
+    _layout(fig, "Quando acontece a saída antecipada", "Mês da operação", "Fração das simulações",
+            barmode="group", hovermode="closest")
+    fig.update_yaxes(tickformat=".0%")
+    return fig
+
+
+def ex_post_exit_chart(x, trigger: float) -> go.Figure:
+    """Ex-post: retorno de saída estimado (marcação diária) × gatilho de % do CDI."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x.dates, y=x.ret, name="Retorno de saída (marcação)", line=dict(color=BLUE, width=2),
+                             hovertemplate="%{y:.2%}"))
+    fig.add_trace(go.Scatter(x=x.dates, y=x.threshold, name=f"Gatilho ({trigger:.0%} do CDI)".replace(".", ","),
+                             line=dict(color=AQUA, width=1.5, dash="dash"), hovertemplate="%{y:.2%}"))
+    for date, label, color in ((x.trigger_date, "Gatilho atingido", ORANGE), (x.exit_date, "Desmontagem", RED)):
+        if date is not None:
+            i = x.dates.index(date)
+            fig.add_trace(go.Scatter(x=[date], y=[x.ret[i]], mode="markers", name=label,
+                                     marker=dict(color=color, size=12, symbol="diamond")))
+    _layout(fig, "Retorno de saída estimado × gatilho", "Data", "Retorno acumulado", height=380)
+    fig.update_xaxes(tickformat="%d/%m/%Y")
+    fig.update_yaxes(tickformat=".0%")
+    return fig

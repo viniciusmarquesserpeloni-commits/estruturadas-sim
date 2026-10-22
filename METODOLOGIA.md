@@ -44,6 +44,25 @@ mercado da estrutura.
 - *Solver de custo zero*: escolhe uma perna e um parâmetro (strike, barreira ou proporção) e encontra,
   por bisseção de Brent, o valor que zera o custo líquido teórico.
 
+**9. Saída antecipada.** As estruturas podem ser desmontadas antes do vencimento. Regra simulada: quando o
+retorno acumulado desde a contratação, já descontado o *spread de saída*, atinge o *gatilho* (padrão: 150% do
+CDI acumulado no mesmo período), o investidor é orientado a pedir a desmontagem; com o OK dele, ela acontece
+alguns pregões depois (padrão: 1), pelo valor daquele dia. Sem gatilho, a operação vai até o vencimento.
+
+- *Marcação diária a modelo:* ação + valor de cada opção com o prazo que falta. Vanilla: Black-Scholes.
+  Barreira já tocada: knock-in vira vanilla, knock-out vale zero. Barreira não tocada: fórmula fechada de
+  Reiner-Rubinstein, com a barreira afastada do preço por B·e^(±0,5826·σ·√(1/252)) para reproduzir o
+  monitoramento no fechamento (correção de Broadie-Glasserman-Kou).
+- *Volatilidade implícita:* sem histórico público, usa-se a vol realizada dos últimos 63 pregões + um
+  adicional (padrão 3 pontos), ou a vol da contratação fixa. A marcação é *calibrada ao preço pago*: a
+  diferença entre o preço pago e o modelo no dia da contratação é somada e amortizada linearmente até o
+  vencimento.
+- *Juros:* com CDI alto, a parte de renda fixa da estrutura vale menos e a régua de 150% do CDI sobe mais
+  rápido, então a saída fica mais rara e mais tardia. O backtest mostra o resultado separado pelo CDI no início
+  de cada janela; o Monte Carlo usa o CDI atual e vol constantes, nos primeiros 2.000 caminhos.
+- Os retornos são comparados ao CDI do período efetivamente investido e anualizados pelo prazo de cada janela.
+  A marcação é uma estimativa; o preço de desmontagem efetivo é o da mesa.
+
 ### Convenções
 
 - 1 mês = 21 dias úteis; ano = 252 pregões.

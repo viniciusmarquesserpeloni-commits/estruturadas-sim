@@ -55,8 +55,33 @@
       ${ex.hits.length ? `<div class="card" style="margin-top:16px"><div class="card-b"><ul class="insight">${ex.hits.map((h) => `<li>${h.hit ? `Barreira <b>${esc(h.label)}</b> tocada em <b>${F.date(h.date)}</b>.` : `Barreira <b>${esc(h.label)}</b> <b>não tocada</b> ${ex.finished ? "durante a operação" : "até agora"}.`}</li>`).join("")}</ul></div></div>` : ""}
       <div class="card" style="margin-top:16px"><div class="card-h"><h3>${esc(ctx.ticker)}: caminho realizado desde a contratação</h3><span class="sub">strikes e barreiras em R$ (nível × valor inicial)</span></div>
         <div class="card-b"><div class="chart tall" id="x-chart"></div></div>
-        <div class="card-note">Preço ${st.adv.adjusted ? "ajustado por proventos" : "bruto"}${st.adv.adjusted ? ": os valores em R$ podem diferir dos da lâmina, mas as variações percentuais são comparáveis" : ""}. Monitoramento: ${E.MONITORING_LABELS[st.adv.monitoring].toLowerCase()}.</div></div>`;
+        <div class="card-note">Preço ${st.adv.adjusted ? "ajustado por proventos" : "bruto"}${st.adv.adjusted ? ": os valores em R$ podem diferir dos da lâmina, mas as variações percentuais são comparáveis" : ""}. Monitoramento: ${E.MONITORING_LABELS[st.adv.monitoring].toLowerCase()}.</div></div>
+      <div id="x-exit"></div>`;
     CH().expost(body.querySelector("#x-chart"), ex, s, ctx.ticker);
+    exitSection(body.querySelector("#x-exit"), ctx, ex);
+  }
+
+  /* Saída antecipada no caminho realizado: marcação diária × gatilho de % do CDI. */
+  function exitSection(el, ctx, ex) {
+    const st = App.state, s = st.structure, cfg = App.exitCfg(st);
+    const title = `<div class="section-title">Saída antecipada — gatilho de ${F.num(cfg.trigger * 100, 0)}% do CDI</div>`;
+    if (!st.adv.exitOn) { el.innerHTML = title + `<div class="card"><div class="card-b small muted">Desativada em <b>Mais opções → Saída antecipada</b>.</div></div>`; return; }
+    const cdiF = ctx.cdiF || E.cdiFactor(ctx.P.d, App.data.cdi && App.data.cdi.d.length ? App.data.cdi : null, ctx.rateAnnual);
+    const nTotal = E.termFromDates(ex.tradeDate, ex.expiry, ctx.P.d).n;
+    const x = E.runExPostExit(s, ctx.P, ex.tradeDate, nTotal, ctx.cost, cfg, cdiF, st.adv.monitoring, ctx.extra);
+    if (!x) { el.innerHTML = ""; return; }
+    let last = x.dates.length - 1;
+    while (last > 0 && !isFinite(x.ret[last])) last--;
+    const gap = x.ret[last] - x.threshold[last];
+    let status;
+    if (x.exitDate) status = `Gatilho atingido em <b>${F.date(x.triggerDate)}</b>; com o OK do investidor, a desmontagem seria em <b>${F.date(x.exitDate)}</b> com retorno de <b>${F.pct(x.exitReturn)}</b> (${F.brl(st.invested * x.exitReturn)}), contra ${F.pct(ex.ret)} ${ex.finished ? "levando ao vencimento" : "de marcação intrínseca hoje"}.`;
+    else if (x.triggerDate) status = `Gatilho atingido em <b>${F.date(x.triggerDate)}</b>; a desmontagem ainda não teria sido concluída (prazo de ${cfg.delay} pregão(ões) para o OK do investidor).`;
+    else status = `Gatilho <b>ainda não atingido</b>${ex.finished ? " durante a operação" : ""}. Em ${F.date(x.dates[last])}: retorno de saída estimado de <b>${F.pct(x.ret[last])}</b> contra gatilho de <b>${F.pct(x.threshold[last])}</b> (${gap >= 0 ? "acima" : "faltam " + F.num(-gap * 100, 2) + " p.p."}).`;
+    el.innerHTML = title + `<div class="${x.triggerDate ? "disclaimer" : "warn-note"}" style="margin-bottom:16px">${status}</div>
+      <div class="card"><div class="card-h"><h3>Retorno de saída estimado × gatilho</h3><span class="sub">marcação a modelo, dia a dia</span></div>
+        <div class="card-b"><div class="chart" id="x-exit-chart"></div></div>
+        <div class="card-note">${App.ui.exitPremises(cfg)} É uma estimativa do valor de desmontagem — o preço efetivo é o da mesa.</div></div>`;
+    CH().expostExit(el.querySelector("#x-exit-chart"), x, cfg);
   }
 
   App.on("results", update);

@@ -5,7 +5,7 @@
 > as decisões já tomadas, o estado atual e as armadilhas conhecidas. Detalhes de cálculo estão no
 > [README](../README.md); a metodologia em linguagem de usuário, em [METODOLOGIA.md](../METODOLOGIA.md).
 >
-> Última atualização: 20/10/2026.
+> Última atualização: 22/10/2026 (inclui a saída antecipada).
 
 ## 1. Quem é o usuário e como trabalhar com ele
 
@@ -55,6 +55,18 @@
    por padrão (intradiário opcional: High/Low no histórico, BGK β = 0,5826 no MC).
 9. **Retorno:** com ação `payoff/(1+c) − 1`; só opções `payoff/c − 1` (exige c > 0); custos adicionais
    subtraídos; brutos de IR.
+10. **Saída antecipada** (pedido do usuário em 22/10/2026; regras confirmadas por ele):
+    - gatilho = retorno acumulado desde a contratação ≥ 150% do CDI acumulado no mesmo período;
+    - quando bate, a mesa orienta o investidor a desmontar (sem carência); depende do OK do investidor →
+      modelado como desmontagem `delay` pregões depois (padrão 1), pelo valor daquele dia;
+    - spread de saída **desconhecido** pelo usuário → parâmetro, padrão 1% (estimativa; ajustar quando souber);
+    - condição avaliada sobre o retorno já líquido do spread;
+    - marcação diária a modelo: Black-Scholes + fórmula fechada de barreira (Reiner-Rubinstein) com BGK
+      **afastando** a barreira (aproxima monitoramento diário); vol = realizada 63d + 3 pts (ou fixa da
+      contratação); **calibrada ao preço pago** (offset do dia 0 amortizado linearmente) por padrão;
+    - MC: 2.000 primeiros caminhos, vol e CDI constantes; histórico: CDI de cada dia;
+    - resultado "com saída" sempre ao lado de "até o vencimento"; % do CDI e anualização pelo prazo efetivo;
+    - histórico separado por nível de CDI no início (≤ 8%, 8–12%, > 12%): o nível de juros domina o resultado.
 
 ## 4. Estado atual (20/10/2026)
 
@@ -63,11 +75,16 @@
   - `e5e97a6` estrutura inicial · `bae8245` motor de payoff + presets · `27faaee` precificação ·
     `7980c97` dados/backtest/métricas · `8c18b52` fix pandas 3 · `c12226f` app Streamlit · `217b8b7` README ·
     `5c49e4a` motor JS · `218b596` site estático + workflow.
-- **Testes:** 40 pytest + 10 node, todos passando.
+- **Testes:** 56 pytest + 13 node, todos passando.
 - **Deploy:** GitHub Pages ativo com *Source: GitHub Actions*; primeiro deploy (run 39344983819) passou em todas
   as etapas; site conferido no ar (BBDC4/Proteção Total: 3.924 janelas, P(lucro) 100%, P>CDI 35,07%, barreira
   acionada 27,55%, ex-post +23,42% até 19/10/2026).
 - **Streamlit:** funciona localmente; **não** foi publicado no Streamlit Community Cloud.
+- **Saída antecipada (22/10/2026):** implementada nos dois motores, no site (Mais opções → Saída antecipada;
+  blocos no Backtest, Monte Carlo e Ex-post) e no Streamlit (seção 7 da barra lateral). Exemplo BBDC4:
+  histórico 69,1% de saídas (dia mediano 62), MC 21,9% (dia 224); operação real a 0,59 p.p. do gatilho em
+  22/10/2026. Commits `bfed7af` (Python) e `04387b4` (JS) + o commit do site/Streamlit/docs — conferir
+  `git log origin/main..` para saber o que falta enviar.
 - **Pendências do usuário:** o GitHub exige ativar a verificação em duas etapas até **23/11/2026**, senão a conta
   fica restrita (afeta pushes). Há um comentário aberto no manual perguntando se as barreiras das lâminas da
   mesa costumam ser monitoradas no fechamento ou no intradiário.
@@ -78,7 +95,7 @@
 estruturadas-sim/
   app.py                     Streamlit (barra lateral + 5 abas)
   METODOLOGIA.md             texto da aba de metodologia do Streamlit
-  estruturadas/              motor Python (legs, presets, pricing, data, backtest, metrics, io, charts, formatting)
+  estruturadas/              motor Python (legs, presets, pricing, data, backtest, early_exit, metrics, io, charts, formatting)
   presets/protecao_total_bbdc4.json   lâmina de exemplo
   scripts/
     build_site_data.py       gera site/data/ (preços Yahoo + CDI/Selic BCB)
@@ -87,8 +104,8 @@ estruturadas-sim/
   site/
     index.html               layout do painel; assets com ?v=__V__ (trocado pelo hash no deploy)
     assets/css/styles.css    tema do painel + estilos do simulador (final do arquivo)
-    assets/js/engine/        legs.js, presets.js, pricing.js, backtest.js (porta do Python; window/globalThis.Estr)
-    assets/js/worker.js      Web Worker (price, solve, hist, mc)
+    assets/js/engine/        legs.js, presets.js, pricing.js, backtest.js, early.js (porta do Python; window/globalThis.Estr)
+    assets/js/worker.js      Web Worker (price, solve, hist, mc, hexit, mcexit)
     assets/js/core.js        App: formatação, estado (localStorage "es:state"), dados, Worker, orquestração
     assets/js/charts.js      ECharts
     assets/js/params.js      barra de parâmetros + "Mais opções"
@@ -117,8 +134,8 @@ troca a estrutura (preset, JSON, solver).
 ```bash
 cd estruturadas-sim
 .venv/Scripts/python -m pip install -r requirements.txt     # se o venv sumir: python -m venv .venv
-.venv/Scripts/python -m pytest -q                            # 40 testes
-node --test tests/js/engine.test.mjs                         # 10 testes (no Windows, passar o arquivo, não a pasta)
+.venv/Scripts/python -m pytest -q                            # 56 testes
+node --test tests/js/engine.test.mjs                         # 13 testes (no Windows, passar o arquivo, não a pasta)
 .venv/Scripts/python scripts/make_js_fixtures.py             # após mudar o motor Python
 .venv/Scripts/python scripts/build_site_data.py PETR4 BBDC4  # dados locais do site (todas: sem argumentos, ~1 min)
 python -m http.server 8770 --directory site                  # site local em http://localhost:8770
@@ -146,6 +163,12 @@ Para acompanhar um deploy sem o `gh`:
 | Máximo "logo abaixo da barreira" | supremo não atingido: P(atingir retorno máximo) pode ser 0% |
 | `streamlit` ≥ 1.50: `use_container_width` descontinuado | usar o padrão (`width="stretch"`) |
 | Agendamento do GitHub pausa após 60 dias sem atividade | reativar o workflow na aba Actions |
+| BGK tem dois sentidos | caminhos diários → intradiário: barreira em direção ao preço (pricing/MC); fórmula contínua → diário: barreira afastada (early_exit). Errar o sentido dá erro de 20–30 erros padrão |
+| Regra "≥ 150% do CDI" sem calibração dispara no 1º–2º dia em épocas de juros baixos | calibração ao preço pago (padrão) |
+| Histórico × MC da saída antecipada muito diferentes | é o nível do CDI (MC usa o atual, 13,75%); ver quebra por regime de juros |
+| `scipy.stats.norm.cdf` lento em laços grandes | `scipy.special.ndtr` nas funções vetorizadas |
+| Streamlit: mesmo gráfico em duas abas → `StreamlitDuplicateElementId` | passar `key=` distinto |
+| `build_site_data.py PETR4 …` com poucas ações apaga os JSON das outras em `site/data/precos` | normal (pasta local, fora do git); rodar sem argumentos para todas |
 
 ## 8. Ideias de próximos passos (roadmap)
 
@@ -156,6 +179,8 @@ Para acompanhar um deploy sem o `gh`:
 - Comparar várias estruturas lado a lado; IR e CDI líquido.
 - Link compartilhável com a estrutura codificada na URL (hoje o estado fica no `localStorage`).
 - Publicar o Streamlit no Community Cloud, se o usuário quiser.
+- Saída antecipada: calibrar spread de saída e adicional de vol com extratos de marcação do banco; vol
+  implícita real via COTAHIST da B3 (ações com opções líquidas); vol variável no MC.
 
 ## 9. Checklist ao mudar algo
 

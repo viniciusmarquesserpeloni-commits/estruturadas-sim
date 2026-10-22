@@ -348,7 +348,7 @@ table.data tr.bench-row td { color: var(--text-2); background: var(--surface-2);
 .input.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pstatus { margin-top: 12px; color: var(--text-2); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .pstatus b { color: var(--text); font-weight: 600; }
-.adv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin-top: 14px; border-top: 1px solid var(--line); }
+.adv { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin-top: 14px; border-top: 1px solid var(--line); }
 .adv .f-group { border-top: 0; border-left: 1px solid var(--line); padding: 14px 16px 6px; }
 .adv .f-group:first-child { border-left: 0; padding-left: 0; }
 .adv .f-group > .f-label { display: block; margin-bottom: 10px; }
@@ -385,7 +385,7 @@ table.legs td.x button:hover { background: var(--surface-2); color: var(--neg); 
 @media (max-width: 1280px) {
   .pbar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .adv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .adv .f-group:nth-child(3) { border-left: 0; padding-left: 0; }
+  .adv .f-group:nth-child(3), .adv .f-group:nth-child(5) { border-left: 0; padding-left: 0; }
   .adv .f-group:nth-child(n+3) { border-top: 1px solid var(--line); }
 }
 @media (max-width: 760px) {

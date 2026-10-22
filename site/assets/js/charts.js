@@ -170,6 +170,50 @@
     });
   };
 
+  /* Saída antecipada: em que mês da operação as janelas/caminhos são desmontados (fração do total). */
+  C.exitDays = function (el, sets, N) {
+    const bin = 21, nb = Math.ceil(N / bin);
+    const labels = Array.from({ length: nb }, (_, i) => `${i + 1}º mês`);
+    const series = sets.map((st) => {
+      const counts = new Array(nb).fill(0);
+      for (let i = 0; i < st.res.n; i++) if (st.res.early[i]) counts[Math.min(nb - 1, Math.floor((st.res.exitDay[i] - 1) / bin))]++;
+      return { name: st.name, type: "bar", data: counts.map((c) => c / st.res.n), barGap: "10%", barMaxWidth: 18,
+        itemStyle: { color: st.color, borderRadius: [3, 3, 0, 0] } };
+    });
+    return C.mount(el, {
+      grid: { left: 8, right: 16, top: 40, bottom: 8, containLabel: true },
+      legend: Object.assign({}, legend, { icon: "circle", itemWidth: 8, itemHeight: 8 }),
+      tooltip: Object.assign({}, tooltipBase, { trigger: "axis", axisPointer: { type: "shadow", shadowStyle: { color: "rgba(14,42,51,.04)" } },
+        formatter: (ps) => `<div class="tt"><div class="tt-h">Saída no ${App.esc(ps[0].axisValue)} (pregões ${(ps[0].dataIndex) * bin + 1}–${Math.min(N, (ps[0].dataIndex + 1) * bin)})</div>${ps.map((p) => row(p.seriesName, F.pct(p.value, 1, false), p.color)).join("")}</div>` }),
+      xAxis: Object.assign({ type: "category", data: labels }, axis, { axisLabel: { color: MUTED, fontSize: 11, hideOverlap: true }, splitLine: { show: false } }),
+      yAxis: Object.assign({ type: "value" }, axis, { axisLabel: { color: MUTED, fontSize: 11, formatter: (v) => pct(v) } }),
+      series,
+    });
+  };
+
+  /* Ex-post: retorno de saída (marcação diária, líquido do spread) × gatilho de % do CDI. */
+  C.expostExit = function (el, x, cfg) {
+    const ret = x.dates.map((d, i) => [d, isFinite(x.ret[i]) ? x.ret[i] : null]);
+    const thr = x.dates.map((d, i) => [d, x.threshold[i]]);
+    const series = [
+      { name: "Retorno de saída (marcação)", type: "line", showSymbol: false, data: ret, lineStyle: { color: BLUE, width: 2 }, itemStyle: { color: BLUE }, z: 3 },
+      { name: `Gatilho (${F.num(cfg.trigger * 100, 0)}% do CDI)`, type: "line", showSymbol: false, data: thr, lineStyle: { color: AQUA, width: 1.5, type: "dashed" }, itemStyle: { color: AQUA }, z: 2 },
+    ];
+    const marks = [];
+    if (x.triggerDate) marks.push({ name: "Gatilho atingido", coord: [x.triggerDate, x.ret[x.dates.indexOf(x.triggerDate)]], color: ORANGE });
+    if (x.exitDate) marks.push({ name: "Desmontagem", coord: [x.exitDate, x.exitReturn], color: RED });
+    marks.forEach((m) => series.push({ name: m.name, type: "scatter", symbol: "diamond", symbolSize: 12, data: [m.coord], itemStyle: { color: m.color, borderColor: "#fff", borderWidth: 2 }, z: 5 }));
+    return C.mount(el, {
+      grid: { left: 8, right: 16, top: 40, bottom: 8, containLabel: true },
+      legend,
+      tooltip: Object.assign({}, tooltipBase, { trigger: "axis", axisPointer: { type: "line", lineStyle: { color: AXIS } },
+        formatter: (ps) => `<div class="tt"><div class="tt-h">${F.date(ps[0].data[0])}</div>${ps.filter((p) => p.data[1] != null).map((p) => row(p.seriesName, F.pct(p.data[1]), p.color)).join("")}</div>` }),
+      xAxis: Object.assign({ type: "time" }, axis, { splitLine: { show: false }, axisLabel: { color: MUTED, fontSize: 11, hideOverlap: true, formatter: { year: "{yyyy}", month: "{MM}/{yy}", day: "{dd}/{MM}" } } }),
+      yAxis: Object.assign({ type: "value", scale: true }, axis, { axisLabel: { color: MUTED, fontSize: 11, formatter: (v) => pct(v) } }),
+      series,
+    });
+  };
+
   /* Amostra de caminhos simulados (nível em % do valor inicial) com strikes e barreiras. */
   C.paths = function (el, res, s) {
     const sample = (res.sample || []).slice(0, 100);

@@ -52,6 +52,32 @@ só com opções:   retorno = valor final / c − 1   (exige c &gt; 0)</span>
           o valor que zera o custo líquido teórico (ou atinge um custo alvo).</li>
         </ul>
 
+        <h3>8. Saída antecipada (desmontagem antes do vencimento)</h3>
+        <p>As estruturas podem ser desmontadas antes do vencimento. A regra simulada: quando o retorno acumulado desde a contratação,
+        já descontado o <b>spread de saída</b>, atinge o <b>gatilho</b> (padrão: 150% do CDI acumulado no mesmo período), o investidor é
+        orientado a pedir a desmontagem; com o OK dele, ela acontece alguns pregões depois (padrão: 1), pelo valor daquele dia — mesmo que
+        a estrutura tenha caído nesse meio-tempo. Sem o gatilho, a operação vai até o vencimento.</p>
+        <span class="formula">retorno de saída no dia k = valor da estrutura(k) / (1 + c) − 1 − spread − custos
+gatilho no dia k        = 1,5 × (CDI acumulado de 0 a k)</span>
+        <p>O <b>valor da estrutura</b> em cada dia (marcação a modelo) é a ação mais o valor de cada opção com o prazo que falta:</p>
+        <ul>
+          <li>opção sem barreira: Black-Scholes;</li>
+          <li>barreira já tocada: knock-in vira opção comum, knock-out vale zero;</li>
+          <li>barreira ainda não tocada: fórmula fechada de Reiner-Rubinstein. Com monitoramento no fechamento, a barreira é afastada do preço
+          por <code>B·e^(±0,5826·σ·√(1/252))</code> (correção de Broadie-Glasserman-Kou), o que reproduz o Monte Carlo diário dentro do erro
+          padrão.</li>
+        </ul>
+        <p><b>Volatilidade implícita.</b> Não há histórico público de vol implícita para a maioria das ações. A marcação usa a vol realizada dos
+        últimos 63 pregões (só com dados até o dia) mais um adicional (padrão: 3 pontos), ou a vol da contratação fixa. Para não depender de
+        acertar o nível exato, a marcação é <b>calibrada ao preço pago</b>: a diferença entre o valor pago e o valor do modelo no dia da
+        contratação é somada à marcação e amortizada linearmente até zerar no vencimento. Isso supõe que o preço da lâmina era justo
+        naquele momento e acompanha o mercado a partir dali.</p>
+        <p><b>Juros importam muito.</b> Com CDI alto, a parte "renda fixa" da estrutura vale menos e a régua de 150% do CDI sobe mais rápido:
+        a saída antecipada fica mais rara e mais tardia. Por isso o backtest mostra o resultado separado pelo nível de CDI no início de cada
+        janela. No Monte Carlo, a marcação usa o CDI atual e vol constantes, nos primeiros 2.000 caminhos.</p>
+        <p>A comparação com o CDI considera o período em que o dinheiro ficou de fato aplicado, e o retorno anualizado usa o prazo de cada
+        janela. A marcação é uma estimativa: o preço de desmontagem efetivo é o da mesa.</p>
+
         <h3>Convenções</h3>
         <ul>
           <li>1 mês = 21 dias úteis; ano = 252 pregões.</li>

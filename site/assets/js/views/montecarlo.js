@@ -32,9 +32,11 @@
           <div class="card-b"><div class="chart" id="m-paths"></div></div></div>
       </div>
       <div class="card" style="margin-top:16px"><div class="card-h"><h3>Métricas: histórico × Monte Carlo</h3></div><div class="card-b">${UI.sideBySide(ctx)}</div>
-        <div class="card-note">No Monte Carlo cada caminho é independente (amostra efetiva = nº de caminhos), mas ele herda as premissas do método: o bootstrap reamostra o passado; o GBM supõe retornos normais com vol constante.</div></div>`;
+        <div class="card-note">No Monte Carlo cada caminho é independente (amostra efetiva = nº de caminhos), mas ele herda as premissas do método: o bootstrap reamostra o passado; o GBM supõe retornos normais com vol constante.</div></div>
+      ${UI.exitBlock(ctx, "mc")}`;
     CH().histogram(root.querySelector("#m-hist"), [{ name: "Monte Carlo", color: CH().COLORS.ORANGE, values: res.ret }], cdi);
     CH().paths(root.querySelector("#m-paths"), res, s);
+    UI.mountExit(root, ctx, "mc");
     root.querySelector("#m-csv").addEventListener("click", () => App.download(`monte_carlo_${ctx.ticker}.csv`, UI.csv(res, st.invested), "text/csv;charset=utf-8"));
   }
 

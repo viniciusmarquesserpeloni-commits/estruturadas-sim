@@ -45,6 +45,8 @@
     start: "2010-01-01", adjusted: true, monitoring: "close", extra: 0,
     vol: null, rate: null, q: 0, pricingPaths: 50000, pricingSeed: 42,
     mcMethod: "bootstrap", mcDrift: "historico", mcPaths: 10000, mcBlock: 20, mcSeed: 42,
+    exitOn: true, exitTrigger: 1.5, exitSpread: 0.01, exitDelay: 1, exitMinDays: 0,
+    exitVolMode: "rolling", exitVolAdd: 0.03, exitCalibrate: true,
   };
   function defaults() {
     const s = E.PRESETS.protecao_total.build();
@@ -158,6 +160,8 @@
     solve: (a) => E.solveZeroCost(a.s, a.legs, a.param, a.sigma, a.r, a.q, a.n, a.paths, a.seed, a.monitoring, a.bounds, a.target),
     hist: (a) => E.runHistorical(a.s, a.P, a.n, a.cost, a.monitoring, a.extra, a.cdiF),
     mc: (a) => E.runMonteCarlo(a.s, a.P, a.n, a.cost, a.o),
+    hexit: (a) => E.runHistoricalExit(a.s, a.P, a.n, a.cost, a.cfg, a.cdiF, a.retHold, a.monitoring, a.extra),
+    mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra),
   };
   try {
     const ver = ((document.querySelector('script[src*="core.js"]') || {}).src || "").split("?")[1] || "";
@@ -258,9 +262,27 @@
     const o = { method: st.adv.mcMethod, nPaths: st.adv.mcPaths, block: st.adv.mcBlock, drift: st.adv.mcDrift, cdiAnnual: ctx.rateAnnual, seed: st.adv.mcSeed, monitoring: st.adv.monitoring, extra };
     try { ctx.mc = await memo("mc:" + key + JSON.stringify(o), () => App.call("mc", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, o })); }
     catch (e) { ctx.mcError = e.message; }
-    ctx.mcPending = false; ctx.loading = false;
+    ctx.mcPending = false;
+    if (!live()) return;
+    // Saída antecipada (marcação diária e gatilho de % do CDI)
+    ctx.exitCfg = App.exitCfg(st);
+    if (st.adv.exitOn) {
+      ctx.exitPending = true; push();
+      const ek = key + JSON.stringify(ctx.exitCfg);
+      try {
+        if (ctx.hist) ctx.hexit = await memo("hexit:" + ek, () => App.call("hexit", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, cdiF: ctx.cdiF, retHold: ctx.hist.ret, monitoring: st.adv.monitoring, extra }));
+        if (!live()) return;
+        if (ctx.mc) ctx.mcexit = await memo("mcexit:" + ek + JSON.stringify(o), () => App.call("mcexit", { s, paths: ctx.mc.sample, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, retHold: ctx.mc.ret, sigma: ctx.mc.sigma, cdiAnnual: ctx.rateAnnual, monitoring: st.adv.monitoring, extra }));
+      } catch (e) { ctx.exitError = e.message; }
+      ctx.exitPending = false;
+    }
+    ctx.loading = false;
     push();
   }
+
+  /* Parâmetros da saída antecipada no formato do motor. */
+  App.exitCfg = (st) => ({ trigger: st.adv.exitTrigger, exitSpread: st.adv.exitSpread, delay: st.adv.exitDelay, minDays: st.adv.exitMinDays,
+    volMode: st.adv.exitVolMode, volWindow: 63, volAdd: st.adv.exitVolAdd, mcPaths: E.EXIT_PATHS, calibrate: st.adv.exitCalibrate });
 
   /* Rótulos de prazo/estrutura para textos. */
   App.termText = (ctx) => `${App.fmt.int(ctx.n)} pregões (≈ ${App.fmt.num(ctx.n / 21, 1)} meses)` + (ctx.obs ? ` · apuração em ${App.fmt.date(ctx.obs)}` : "");

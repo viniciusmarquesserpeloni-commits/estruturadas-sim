@@ -28,7 +28,7 @@ inicial, tipo de barreira *Knock Up/Down and In/Out* e proporção), e os result
      4.5 Validações · 4.6 Prazo e calendário · 4.7 Preços e ajustes · 4.8 CDI e Selic ·
      4.9 Backtest por janelas históricas · 4.10 Monte Carlo · 4.11 Monitoramento intradiário ·
      4.12 Ex-post · 4.13 Métricas · 4.14 Quadro de rentabilidade · 4.15 Precificação teórica ·
-     4.16 Solver de custo zero · 4.17 Textos em linguagem simples
+     4.16 Solver de custo zero · 4.17 Textos em linguagem simples · 4.18 Saída antecipada
 5. [Presets e fórmulas do payoff](#5-presets-e-fórmulas-do-payoff)
 6. [Módulos: Python, JavaScript e demais linguagens](#6-módulos-python-javascript-e-demais-linguagens)
 7. [Bibliotecas e serviços externos](#7-bibliotecas-e-serviços-externos)
@@ -56,6 +56,7 @@ continuidade ao projeto em outra conversa ou com outra pessoa).
 | Ex-post | A estrutura aplicada ao caminho realmente observado entre contratação e apuração; antes do vencimento, marcação intrínseca "até hoje". |
 | Custo das opções | **Informado** (cotação da mesa) ou **Teórico** (Black-Scholes + Monte Carlo neutro ao risco). |
 | Solver de custo zero | Encontra o strike, a barreira ou a proporção que zera o custo líquido teórico. |
+| Saída antecipada | Desmontagem antes do vencimento quando a estrutura rende acima de 150% do CDI (configurável): marcação diária a modelo em todas as janelas, nos caminhos do Monte Carlo e na operação real (ex-post). |
 | Exportações | Estrutura em JSON (para guardar lâminas) e resultados em CSV no formato brasileiro. |
 
 ## 2. Duas versões: site público e app Streamlit
@@ -352,6 +353,126 @@ números citados com a própria função de payoff (ex.: "se a ação nunca subi
 57,15% logo abaixo da barreira"). Se a "forma" da estrutura mudar (tipos, posições e barreiras das pernas
 diferentes das do preset), usa-se um texto genérico com cenários de −30% a +50% nos dois ramos.
 
+### 4.18 Saída antecipada (desmontagem antes do vencimento)
+
+As estruturas da mesa não são europeias na prática: podem ser desmontadas antes do vencimento. A regra
+simulada reproduz a orientação da mesa:
+
+1. Em cada pregão `k`, calcula-se o **retorno de saída**, o que o investidor receberia se desmontasse hoje,
+   já descontado o spread de saída e os custos adicionais:
+
+```
+retorno_saída(k) = valor_estrutura(k) / (1 + c) − 1 − spread_saída − custos
+(estrutura só com opções: valor_estrutura(k) / c − 1 − spread_saída − custos)
+```
+
+2. O **gatilho** é atingido no primeiro pregão em que
+   `retorno_saída(k) ≥ múltiplo × CDI acumulado(0, k)` e `retorno_saída(k) > 0`, com `k ≥ carência`.
+   Padrão: múltiplo = 1,5 (150% do CDI), carência = 0.
+3. Com o **OK do investidor**, a desmontagem acontece `delay` pregões depois (padrão 1), pelo retorno de saída
+   **daquele dia**, mesmo que a estrutura tenha caído entre o gatilho e a desmontagem. Se o gatilho não é
+   atingido, ou se a desmontagem cairia no dia da apuração ou depois, vale o payoff do vencimento.
+
+**Marcação a modelo (valor da estrutura no dia k)**, com prazo restante `T = (N − k)/252`, taxa `r` e vol `σ`:
+
+| Perna | Valor |
+|---|---|
+| Ação | `S_k` |
+| Opção sem barreira | Black-Scholes (seção 4.15) |
+| Barreira já tocada | knock-in = opção vanilla; knock-out = 0 |
+| Barreira ainda não tocada | fórmula fechada de Reiner-Rubinstein (abaixo), com a barreira ajustada pelo BGK |
+
+Fórmula fechada de barreira (Reiner-Rubinstein, como em Haug; sem rebate), com `b = r − q`,
+`μ = (b − σ²/2)/σ²`, `φ = +1` para call e `−1` para put, `η = −1` para barreira de alta e `+1` para de baixa:
+
+```
+x1 = ln(S/K)/(σ√T) + (1+μ)σ√T          x2 = ln(S/H)/(σ√T) + (1+μ)σ√T
+y1 = ln(H²/(S·K))/(σ√T) + (1+μ)σ√T     y2 = ln(H/S)/(σ√T) + (1+μ)σ√T
+A = φ·S·e^((b−r)T)·N(φx1) − φ·K·e^(−rT)·N(φx1 − φσ√T)
+B = φ·S·e^((b−r)T)·N(φx2) − φ·K·e^(−rT)·N(φx2 − φσ√T)
+C = φ·S·e^((b−r)T)·(H/S)^(2(μ+1))·N(ηy1) − φ·K·e^(−rT)·(H/S)^(2μ)·N(ηy1 − ησ√T)
+D = φ·S·e^((b−r)T)·(H/S)^(2(μ+1))·N(ηy2) − φ·K·e^(−rT)·(H/S)^(2μ)·N(ηy2 − ησ√T)
+```
+
+| Opção | K > H | K < H |
+|---|---|---|
+| Call up-and-in | A | B − C + D |
+| Call up-and-out | 0 | A − B + C − D |
+| Call down-and-in | C | A − B + D |
+| Call down-and-out | A − C | B − D |
+| Put up-and-in | A − B + D | C |
+| Put up-and-out | B − D | A − C |
+| Put down-and-in | B − C + D | A |
+| Put down-and-out | A − B + C − D | 0 |
+
+*Racional:* uma fórmula fechada permite marcar a estrutura em todos os dias de todas as janelas (≈ 3.900
+janelas × 249 dias no BBDC4) em segundos, sem rodar um Monte Carlo dentro de cada dia. A paridade in + out =
+vanilla vale exatamente e é testada para todas as combinações.
+
+**Correção BGK no sentido certo.** A fórmula supõe monitoramento contínuo; as barreiras das lâminas costumam
+ser observadas no fechamento diário. Para reproduzir o monitoramento discreto com a fórmula contínua, a barreira
+é **afastada** do preço: `H = B·e^(+0,5826·σ·√(1/252))` para alta e `B·e^(−0,5826·σ·√(1/252))` para baixa. (É
+o sentido oposto ao da seção 4.11, que aproxima o intradiário a partir de caminhos diários.) Com o ajuste, a
+fórmula bate com o Monte Carlo diário de 100 mil caminhos dentro de 1,5 erro padrão; sem ele, erra por 20–30
+erros padrão. No modo intradiário a barreira não é ajustada.
+
+**Volatilidade "implícita" da marcação.** Não há histórico público de vol implícita para a maioria das ações.
+Opções implementadas:
+
+- **Vol realizada móvel** (padrão): desvio dos últimos 63 log-retornos até o próprio dia (sem olhar o futuro)
+  × √252, mais um **adicional** (padrão 3 pontos), já que o mercado costuma cobrar vol acima da realizada.
+- **Vol da contratação fixa:** a vol realizada do dia da contratação + adicional, durante toda a operação.
+
+**Calibração ao preço pago (padrão).** O modelo raramente dá exatamente o preço da lâmina: a mesa usa vol
+implícita, skew e margem próprios, e, no histórico, os mesmos parâmetros em % são aplicados em épocas de juros
+e vol muito diferentes (no BBDC4 o valor teórico da Proteção Total no dia 0 vai de −8% a +6% do preço pago,
+conforme a época). Por isso a diferença `preço pago − valor do modelo no dia 0` é somada à marcação e
+amortizada linearmente até zerar no vencimento:
+
+```
+valor_calibrado(k) = valor_modelo(k) + [ (1 + c) − valor_modelo(0) ] · (N − k)/N
+```
+
+Isso equivale a supor que a lâmina estava a preço justo na contratação (a vol implícita está embutida no preço) e
+acompanhar o mercado a partir daí. Sem a calibração ("modelo puro"), em épocas de juros baixos a estrutura já
+nasce valendo mais que o preço pago e o gatilho dispara artificialmente nos primeiros dias (dia mediano 11,
+contra 62 com calibração, no exemplo abaixo).
+
+**Taxa de juros.** Histórico: o CDI de cada pregão, em taxa contínua `252·ln(1 + CDI do dia)`. Monte Carlo:
+o CDI atual constante. Ex-post: o CDI realizado.
+
+**Monte Carlo.** A saída antecipada usa os primeiros 2.000 caminhos completos (guardados pelo MC), com vol
+constante (vol histórica + adicional) e CDI constante. Com monitoramento intradiário, os toques usam a barreira
+deslocada em direção ao preço, como no payoff do MC.
+
+**Juros mudam tudo.** Com CDI alto, a parte de renda fixa da estrutura (o piso) vale menos e a régua de 150%
+do CDI cresce mais rápido; com CDI baixo acontece o contrário. Por isso o backtest separa o resultado pelo CDI
+no início de cada janela (até 8%, 8–12%, acima de 12% a.a.) e destaca a faixa do CDI atual.
+
+**Métricas** (`summarize_exit` / `E.summarizeExit`): P(gatilho atingido), P(saída antes do vencimento), dia da
+saída (quartis), retorno médio e mediano com saída × levando ao vencimento, P(lucro), P(perda),
+P(retorno > CDI do período **efetivamente investido**), % do CDI mediano do período investido e retorno
+anualizado mediano `(1 + r)^(252/dias) − 1`, já que cada janela tem prazo diferente.
+
+**Exemplo — Proteção Total BBDC4** (249 pregões, janelas desde 2010, gatilho 150% do CDI, spread de saída 1%,
+desmontagem 1 pregão após o gatilho, vol móvel + 3 pontos, calibrada):
+
+| | Histórico | Monte Carlo (CDI 13,75%, motor Python) |
+|---|---|---|
+| P(saída antecipada) | 69,1% | 21,9% |
+| Dia mediano da saída | 62 | 224 |
+| Retorno médio com saída × no vencimento | 5,5% × 11,0% | 7,9% × 8,6% |
+| P(> CDI) com saída × no vencimento | 68,2% × 35,1% | 23,4% × 16,6% |
+
+No histórico, as janelas que começaram com CDI acima de 12% tiveram saída antecipada em 50% dos casos (dia
+mediano 160), contra 81% com CDI até 8%. **Leitura:** sair no gatilho troca retorno médio por consistência,
+porque corta os cenários de alta forte; e o cenário de juros define a chance de sair cedo. Na operação real
+(contratada em 19/11/2025), o retorno de saída estimado em 22/10/2026 era 18,85%, contra gatilho de 19,44%.
+
+**Limitações.** A marcação é um modelo: o preço de desmontagem efetivo é o da mesa (vol implícita, skew,
+spread real). O spread de saída padrão (1%) é uma estimativa: ajuste quando souber o valor praticado. O modelo
+supõe que o investidor sempre aceita a desmontagem quando orientado.
+
 ## 5. Presets e fórmulas do payoff
 
 Valores em % do valor inicial (S0 = 1). Nos exemplos com ação, custo das opções = 0.
@@ -387,10 +508,11 @@ Actions), **JSON** (dados, lâminas e fixtures) e **TOML/INI** (configurações)
 |---|---|---|
 | [`legs.py`](estruturadas/legs.py) | Modelo de pernas e estruturas; validação; avaliação vetorizada do payoff em matrizes de caminhos; retornos; perfil no vencimento | `Leg`, `Structure`, `validate`, `summarize_paths`, `event_hits`, `evaluate_paths`, `first_hit_index`, `returns_from_payoff`, `expiry_payoff`, `payoff_profile_summary` |
 | [`presets.py`](estruturadas/presets.py) | 9 estruturas pré-definidas, fórmulas e textos em linguagem simples | `booster`, `collar`, `collar_ki`, `forward_knock_out`, `trava_alta`, `trava_baixa`, `straddle`, `strangle`, `protecao_total_bbdc4`, `PRESETS`, `describe` |
-| [`pricing.py`](estruturadas/pricing.py) | Black-Scholes; Monte Carlo neutro ao risco com antitéticas e BGK; custo líquido; solver de custo zero | `bs_price`, `gbm_paths`, `make_mc_context`, `mc_price_leg`, `price_structure`, `solve_zero_cost` |
+| [`pricing.py`](estruturadas/pricing.py) | Black-Scholes (escalar e vetorizado); fórmula fechada de barreira; Monte Carlo neutro ao risco com antitéticas e BGK; custo líquido; solver de custo zero | `bs_price`, `bs_price_vec`, `barrier_price`, `gbm_paths`, `make_mc_context`, `mc_price_leg`, `price_structure`, `solve_zero_cost` |
 | [`data.py`](estruturadas/data.py) | Preços (yfinance, CSV), ajuste por proventos, vol histórica, Selic/CDI (API SGS), calendário de pregões | `normalize_ticker`, `load_prices_yf`, `parse_price_csv`, `historical_vol`, `fetch_selic_meta`, `fetch_cdi_daily`, `cdi_factor_on_index`, `b3_holidays`, `previous_business_day`, `count_trading_days`, `term_from_dates` |
 | [`backtest.py`](estruturadas/backtest.py) | Janelas históricas, bootstrap em blocos, GBM, ex-post | `historical_windows`, `run_historical`, `block_bootstrap_paths`, `gbm_drift_daily`, `run_monte_carlo`, `run_ex_post` |
-| [`metrics.py`](estruturadas/metrics.py) | Estatísticas, tabela comparativa, quadro de rentabilidade | `summarize`, `comparison_table`, `default_variations`, `profitability_table` |
+| [`metrics.py`](estruturadas/metrics.py) | Estatísticas, tabela comparativa, quadro de rentabilidade, métricas da saída antecipada | `summarize`, `comparison_table`, `default_variations`, `profitability_table`, `summarize_exit`, `exit_table`, `exit_by_cdi_regime` |
+| [`early_exit.py`](estruturadas/early_exit.py) | Saída antecipada: marcação diária a modelo, calibração, regra do gatilho; histórico, Monte Carlo e ex-post | `EarlyExitConfig`, `structure_value`, `rolling_vol`, `cdi_rate_series`, `simulate_exit`, `run_historical_exit`, `run_mc_exit`, `run_ex_post_exit` |
 | [`io.py`](estruturadas/io.py) | Import/export de lâminas em JSON (aceita nomes em pt e en) | `dumps`, `loads`, `save`, `load` |
 | [`charts.py`](estruturadas/charts.py) | Gráficos Plotly com separadores brasileiros | `payoff_chart`, `histogram_chart`, `windows_timeseries_chart`, `price_chart`, `ex_post_chart`, `mc_paths_chart` |
 | [`formatting.py`](estruturadas/formatting.py) | Números no formato 1.234,56 | `fmt_num`, `fmt_pct`, `fmt_brl`, `fmt_level` |
@@ -419,7 +541,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 | `assets/js/engine/legs.js` | Porta de `legs.py` + import/export JSON + formatação pt-BR. |
 | `assets/js/engine/presets.js` | Porta de `presets.py` (textos em HTML). |
 | `assets/js/engine/pricing.js` | Black-Scholes (normal de Hart/West), gerador mulberry32 + Box-Muller, GBM antitético resumido, preço por perna, solver de Brent. |
-| `assets/js/engine/backtest.js` | Calendário B3, preparação de preços, fator do CDI, janelas históricas, bootstrap, GBM, ex-post, métricas, quadro de rentabilidade. |
+| `assets/js/engine/backtest.js` | Calendário B3, preparação de preços, fator do CDI, janelas históricas, bootstrap, GBM (guarda 2.000 caminhos completos), ex-post, métricas, quadro de rentabilidade. |
+| `assets/js/engine/early.js` | Porta de `early_exit.py`: fórmula de barreira, marcação diária calibrada, regra de saída, histórico, Monte Carlo, ex-post e métricas. |
 | `assets/js/worker.js` | Web Worker que executa `price`, `solve`, `hist` e `mc` fora da thread da página. |
 | `assets/js/core.js` | Formatação, estado (persistido em `localStorage`, chave `es:state`), carga de dados, parser de CSV, chamada ao Worker (com fallback local) e orquestração/caches dos cálculos. |
 | `assets/js/charts.js` | Gráficos ECharts: payoff, histograma, janelas, preço, ex-post e caminhos do MC. |
@@ -432,8 +555,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 
 | Arquivo | Linguagem | Função |
 |---|---|---|
-| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py) | Python (pytest) | 40 testes do motor Python |
-| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 10 testes do motor JS, incluindo comparação com o Python |
+| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py) | Python (pytest) | 56 testes do motor Python |
+| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 13 testes do motor JS, incluindo comparação com o Python |
 | [`.github/workflows/pages.yml`](.github/workflows/pages.yml) | YAML | Testes + dados + deploy no GitHub Pages |
 | [`.streamlit/config.toml`](.streamlit/config.toml) | TOML | Tema e servidor do Streamlit |
 | [`pytest.ini`](pytest.ini), [`requirements.txt`](requirements.txt), `.gitignore`, `.gitattributes` | INI/texto | Configuração de testes, dependências e git (fim de linha LF) |
@@ -462,8 +585,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 ## 8. Testes e validação cruzada Python × JS
 
 ```bash
-pytest                                   # 40 testes do motor Python
-node --test tests/js/engine.test.mjs     # 10 testes do motor JS
+pytest                                   # 56 testes do motor Python
+node --test tests/js/engine.test.mjs     # 13 testes do motor JS
 python scripts/make_js_fixtures.py       # regenera as referências após mudar o motor Python
 ```
 
@@ -482,11 +605,16 @@ intradiário); paridade put-call; Black-Scholes contra valor de referência (Hul
 (`MC(up-in) + MC(up-out) = MC(vanilla)` caminho a caminho, e vanilla MC ≈ BS dentro de 3 erros padrão);
 BGK aumenta o preço de knock-in; solver com |custo| < 10⁻⁶ e caso sem solução; backtest em série sintética
 (número de janelas e retornos esperados); ex-post encerrado, em andamento e com data do toque; calendário;
-round-trip de JSON (exportar → importar → payoff idêntico).
+round-trip de JSON (exportar → importar → payoff idêntico). Saída antecipada: paridade in + out = vanilla
+da fórmula fechada em 8 casos (call/put × alta/baixa × strike acima/abaixo da barreira); fórmula + BGK × Monte Carlo diário; convergência
+da marcação ao payoff perto do vencimento; regras de gatilho, delay, carência, spread e vencimento em casos
+determinísticos; calibração no dia 0; histórico, Monte Carlo e ex-post.
 
 **Validação cruzada:** `make_js_fixtures.py` grava payoffs de todos os presets em caminhos aleatórios
 (fechamento e intradiário), perfis no vencimento, quadros de rentabilidade, preços de Black-Scholes, backtests
-históricos em série sintética, ex-posts e casos de calendário. O teste JS exige igualdade até 10⁻¹⁰.
+históricos em série sintética, ex-posts, casos de calendário e a saída antecipada (fórmulas de barreira,
+marcação, vol móvel, taxa do CDI, dias de gatilho e de saída e retornos em 5 configurações, além do ex-post).
+O teste JS exige igualdade até 10⁻¹⁰ (10⁻⁹ nos retornos da saída antecipada).
 
 ## 9. Como rodar, publicar e atualizar
 
@@ -614,6 +742,8 @@ Atalho: o preset **Proteção Total (BBDC4)** já traz essa tabela, a ação e a
 - Reprecificar a estrutura em cada janela histórica com a vol e os juros da época.
 - Vol implícita e skew no modo Teórico; dividendos discretos.
 - Monitoramento intradiário no Monte Carlo com ponte browniana.
+- Saída antecipada: calibrar o spread de saída e o adicional de vol com extratos de marcação do banco; vol
+  implícita real (arquivos COTAHIST da B3) para as ações com opções líquidas; vol variável no Monte Carlo.
 - Autocalls e estruturas com cupom; estruturas com mais de um ativo.
 - Comparação lado a lado de várias estruturas na mesma ação.
 - IR e come-cotas para comparar com o CDI líquido.
