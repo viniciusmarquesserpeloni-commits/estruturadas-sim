@@ -145,3 +145,85 @@ def profitability_table(structure: Structure, cost: float, variations, extra_cos
             sign = c == "Variação da ação"
             df[c] = [fmt_pct(x, 2, sign=sign) if np.isfinite(x) else "—" for x in df[c]]
     return df
+
+
+# ---------------------------------------------------------------------------
+# Saída antecipada
+# ---------------------------------------------------------------------------
+
+def summarize_exit(res) -> dict:
+    """Métricas da estratégia "sair quando bater o gatilho" × "levar até o vencimento".
+
+    ``res`` = EarlyExitResult. Prazos diferentes por janela: retornos comparados ao CDI do período
+    efetivamente investido e anualizados pelo prazo de cada janela."""
+    df, N = res.df, res.n_days
+    r = df["retorno_final"].to_numpy(dtype=float)
+    hold = df["retorno_vencimento"].to_numpy(dtype=float)
+    days = df["dias"].to_numpy(dtype=float)
+    cdi = df["cdi_periodo"].to_numpy(dtype=float)
+    early = df["saida_antecipada"].to_numpy(dtype=bool)
+    exit_days = df.loc[early, "dia_saida"].to_numpy(dtype=float)
+    ann = (1 + r) ** (TRADING_DAYS / days) - 1
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pct_cdi = np.where(cdi > 0, r / cdi, np.nan)
+    q = np.percentile(exit_days, [25, 50, 75]) if early.any() else [np.nan] * 3
+    return {
+        "n": len(r),
+        "p_gatilho": float(df["gatilho"].mean()),
+        "p_saida": float(early.mean()),
+        "dias_p25": float(q[0]), "dias_mediana": float(q[1]), "dias_p75": float(q[2]),
+        "ret_saida_media": float(r[early].mean()) if early.any() else float("nan"),
+        "media": float(np.mean(r)), "mediana": float(np.median(r)),
+        "media_venc": float(np.mean(hold)),
+        "p_lucro": float(np.mean(r > TOL)), "p_perda": float(np.mean(r < -TOL)),
+        "p_cdi": float(np.mean(r > cdi + TOL)),
+        "pct_cdi_mediana": float(np.nanmedian(pct_cdi)),
+        "anual_mediana": float(np.median(ann)),
+        "dias_medio": float(np.mean(days)),
+    }
+
+
+_EXIT_ROWS = [
+    ("p_gatilho", "P(gatilho atingido)", "pct"),
+    ("p_saida", "P(saída antes do vencimento)", "pct"),
+    ("dias_mediana", "Dia mediano da saída (pregões)", "int"),
+    ("dias_medio", "Prazo médio investido (pregões)", "int"),
+    ("ret_saida_media", "Retorno médio nas saídas antecipadas", "pct"),
+    ("media", "Retorno médio (com saída)", "pct"),
+    ("media_venc", "Retorno médio levando ao vencimento", "pct"),
+    ("mediana", "Retorno mediano (com saída)", "pct"),
+    ("anual_mediana", "Retorno anualizado mediano (com saída)", "pct"),
+    ("p_lucro", "P(lucro > 0) com saída", "pct"),
+    ("p_perda", "P(perda) com saída", "pct"),
+    ("p_cdi", "P(retorno > CDI do período investido)", "pct"),
+    ("pct_cdi_mediana", "% do CDI mediano (período investido)", "pct"),
+]
+
+
+def exit_table(summaries: dict[str, dict]) -> pd.DataFrame:
+    rows = [[_fmt(s.get(k), kind) for s in summaries.values()] for k, _, kind in _EXIT_ROWS]
+    return pd.DataFrame(rows, index=[name for _, name, _ in _EXIT_ROWS], columns=list(summaries.keys()))
+
+
+CDI_REGIMES = [(0.0, 0.08, "CDI até 8% a.a."), (0.08, 0.12, "CDI entre 8% e 12% a.a."), (0.12, 1.0, "CDI acima de 12% a.a.")]
+
+
+def exit_by_cdi_regime(res) -> pd.DataFrame:
+    """Saída antecipada nas janelas históricas agrupadas pelo CDI no início da janela: o nível de juros
+    muda o valor da estrutura e a régua de 150% do CDI, então a média geral mistura cenários diferentes."""
+    df = res.df
+    rows = []
+    for lo, hi, label in CDI_REGIMES:
+        sel = df[(df["cdi_inicio"] > lo) & (df["cdi_inicio"] <= hi)]
+        if sel.empty:
+            continue
+        early = sel["saida_antecipada"]
+        rows.append({
+            "Juros no início": label, "Janelas": len(sel),
+            "P(saída antecipada)": float(early.mean()),
+            "Dia mediano da saída": float(sel.loc[early, "dia_saida"].median()) if early.any() else float("nan"),
+            "P(> CDI) com saída": float((sel["retorno_final"] > sel["cdi_periodo"] + TOL).mean()),
+            "Retorno médio com saída": float(sel["retorno_final"].mean()),
+            "Retorno médio no vencimento": float(sel["retorno_vencimento"].mean()),
+        })
+    return pd.DataFrame(rows)

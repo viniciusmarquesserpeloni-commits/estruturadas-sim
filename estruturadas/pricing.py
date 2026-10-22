@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.optimize import brentq
+from scipy.special import ndtr
 from scipy.stats import norm
 
 from .legs import Leg, Structure, leg_active, leg_payoff, event_hits, PathSummary, summarize_paths
@@ -48,6 +49,50 @@ def bs_price(kind: str, S, K, T, r: float, q: float, sigma: float):
     if kind == "call":
         return S * df_q * norm.cdf(d1) - K * df_r * norm.cdf(d2)
     return K * df_r * norm.cdf(-d2) - S * df_q * norm.cdf(-d1)
+
+
+def bs_price_vec(kind: str, S, K, T, r, q, sigma):
+    """Black-Scholes totalmente vetorizado (S, T, r, sigma podem ser arrays); exige T > 0 e sigma > 0."""
+    S, T, r, sigma = (np.asarray(x, dtype=float) for x in (S, T, r, sigma))
+    sT = sigma * np.sqrt(T)
+    d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / sT
+    d2 = d1 - sT
+    if kind == "call":
+        return S * np.exp(-q * T) * ndtr(d1) - K * np.exp(-r * T) * ndtr(d2)
+    return K * np.exp(-r * T) * ndtr(-d2) - S * np.exp(-q * T) * ndtr(-d1)
+
+
+def barrier_price(kind: str, barrier: str, S, K: float, H, T, r, q, sigma):
+    """Opção com barreira de monitoramento contínuo, sem rebate (Reiner-Rubinstein, como em Haug).
+
+    Válida enquanto a barreira não foi tocada (S abaixo de H para barreiras de alta, acima para
+    as de baixa). Arrays em S, H, T, r e sigma são aceitos (broadcast)."""
+    S, H, T, r, sigma = (np.asarray(x, dtype=float) for x in (S, H, T, r, sigma))
+    b = r - q
+    sT = sigma * np.sqrt(T)
+    mu = (b - 0.5 * sigma**2) / sigma**2
+    x1 = np.log(S / K) / sT + (1 + mu) * sT
+    x2 = np.log(S / H) / sT + (1 + mu) * sT
+    y1 = np.log(H**2 / (S * K)) / sT + (1 + mu) * sT
+    y2 = np.log(H / S) / sT + (1 + mu) * sT
+    eq, er = np.exp((b - r) * T), np.exp(-r * T)
+    eta = -1.0 if barrier.startswith("up") else 1.0
+    phi = 1.0 if kind == "call" else -1.0
+    hs1, hs2 = (H / S) ** (2 * (mu + 1)), (H / S) ** (2 * mu)
+    A = phi * S * eq * ndtr(phi * x1) - phi * K * er * ndtr(phi * x1 - phi * sT)
+    B = phi * S * eq * ndtr(phi * x2) - phi * K * er * ndtr(phi * x2 - phi * sT)
+    C = phi * S * eq * hs1 * ndtr(eta * y1) - phi * K * er * hs2 * ndtr(eta * y1 - eta * sT)
+    D = phi * S * eq * hs1 * ndtr(eta * y2) - phi * K * er * hs2 * ndtr(eta * y2 - eta * sT)
+    zero = np.zeros_like(A)
+    # (strike acima da barreira, strike abaixo da barreira)
+    table = {
+        ("call", "up_in"): (A, B - C + D), ("call", "up_out"): (zero, A - B + C - D),
+        ("call", "down_in"): (C, A - B + D), ("call", "down_out"): (A - C, B - D),
+        ("put", "up_in"): (A - B + D, C), ("put", "up_out"): (B - D, A - C),
+        ("put", "down_in"): (B - C + D, A), ("put", "down_out"): (A - B + C - D, zero),
+    }
+    above, below = table[(kind, barrier)]
+    return np.where(K > H, above, below)
 
 
 # ---------------------------------------------------------------------------

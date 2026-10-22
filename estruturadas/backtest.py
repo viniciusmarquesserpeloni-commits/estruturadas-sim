@@ -14,6 +14,7 @@ from .pricing import BGK_BETA, gbm_paths
 
 DRIFT_LABELS = {"historico": "Histórico", "zero": "Zero", "cdi": "CDI"}
 MC_METHOD_LABELS = {"bootstrap": "Bootstrap em blocos", "gbm": "GBM (log-normal)"}
+EXIT_PATHS = 2000  # caminhos guardados para a simulação da saída antecipada
 
 
 @dataclass
@@ -164,7 +165,8 @@ def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cos
     df = _results_frame(structure, ev, cost, extra_cost)
     df["retorno_cdi"] = (1 + cdi_annual) ** (n_days / TRADING_DAYS) - 1
     meta = {"method": method, "sigma": sigma, "drift": drift, "block": block, "seed": seed,
-            "monitoring": monitoring, "paths_sample": paths[: min(200, len(paths))]}
+            "monitoring": monitoring, "paths_sample": paths[: min(200, len(paths))],
+            "paths_exit": paths[: min(EXIT_PATHS, len(paths))]}
     return BacktestResult(df, _event_columns(structure), n_days, len(df),
                           _return_max(structure, cost, extra_cost), "mc", meta)
 
