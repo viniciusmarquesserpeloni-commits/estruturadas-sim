@@ -6,6 +6,7 @@
   const TD = 252, TOL = 1e-9;
   E.DRIFT_LABELS = { historico: "Histórico", zero: "Zero", cdi: "CDI" };
   E.MC_METHOD_LABELS = { bootstrap: "Bootstrap em blocos", gbm: "GBM (log-normal)" };
+  E.EXIT_PATHS = 2000; // caminhos completos guardados (gráfico usa 100; saída antecipada usa todos)
 
   /* ---------------- Datas e calendário ---------------- */
   const toUTC = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return Date.UTC(y, m - 1, d); };
@@ -188,8 +189,8 @@
     const lr = E.logReturns(P);
     const m = lr.reduce((a, b) => a + b, 0) / lr.length;
     const sigma = Math.sqrt(lr.reduce((a, b) => a + (b - m) * (b - m), 0) / (lr.length - 1) * TD);
-    const sum = method === "bootstrap" ? E.blockBootstrapSummary(lr, nPaths, N, block, seed, 100)
-      : E.gbmSummary(nPaths, N, sigma, E.gbmDriftDaily(lr, sigma, drift, cdiAnnual), seed, true, 100);
+    const sum = method === "bootstrap" ? E.blockBootstrapSummary(lr, nPaths, N, block, seed, E.EXIT_PATHS)
+      : E.gbmSummary(nPaths, N, sigma, E.gbmDriftDaily(lr, sigma, drift, cdiAnnual), seed, true, E.EXIT_PATHS);
     const shift = monitoring === "intraday" ? E.BGK_BETA * sigma * Math.sqrt(1 / TD) : 0;
     const r = resultFrom(s, sum, cost, extra, shift);
     const n = sum.sT.length;

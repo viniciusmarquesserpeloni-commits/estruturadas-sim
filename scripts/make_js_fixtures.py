@@ -110,6 +110,53 @@ def main() -> None:
                               "last": r.last_date, "finished": r.finished, "ret": r.retorno, "n": r.n_days_elapsed,
                               "hits": [[lbl, hit, when] for lbl, (hit, when) in r.hits.items()]})
 
+    # Saída antecipada (marcação diária, gatilho de % do CDI)
+    from estruturadas.early_exit import (EarlyExitConfig, cdi_rate_series, rolling_vol, run_ex_post_exit,
+                                         run_historical_exit, structure_value)
+    from estruturadas.pricing import barrier_price
+    days = np.arange(len(prices))
+    cf_var = np.cumprod(np.r_[1.0, (1 + 0.00035 + 0.00015 * np.sin(days[1:] / 40.0))])
+    out["saida"] = {"cdiF": cf_var, "rolling_vol": rolling_vol(prices["Close"].to_numpy(), 63),
+                    "cdi_rate": cdi_rate_series(cf_var), "barreira": [], "valor": [], "historico": [], "expost": []}
+    for kind in ("call", "put"):
+        for barrier, H in (("up_in", 1.3), ("up_out", 1.3), ("down_in", 0.75), ("down_out", 0.75)):
+            for K in (0.7, 1.0, 1.4):
+                for S in (0.9, 1.0, 1.1):
+                    v = float(barrier_price(kind, barrier, S, K, H, 0.6, 0.11, 0.01, 0.35))
+                    out["saida"]["barreira"].append([kind, barrier, S, K, H, v])
+    pt = presets.protecao_total_bbdc4()
+    for S, mx, mn, T, mon in ((1.0, 1.0, 1.0, 1.0, "close"), (1.2, 1.25, 0.95, 0.5, "close"),
+                              (1.1, 1.4, 0.9, 0.3, "close"), (0.85, 1.1, 0.8, 0.2, "intraday")):
+        v = float(structure_value(pt, np.array([S]), np.array([mx]), np.array([mn]), T, np.array([0.12]),
+                                  np.array([0.3]), mon)[0])
+        out["saida"]["valor"].append([S, mx, mn, T, mon, v])
+    cases = [("protecao_total", 60, "close", EarlyExitConfig()),
+             ("protecao_total", 60, "close", EarlyExitConfig(calibrate=False, delay=0)),
+             ("collar_ki", 45, "intraday", EarlyExitConfig(min_days=10, exit_spread=0.02, delay=2)),
+             ("fko", 50, "close", EarlyExitConfig(vol_mode="fixed", vol_add=0.0, trigger=1.2)),
+             ("booster", 30, "close", EarlyExitConfig(exit_spread=0.0))]
+    for key, N, mon, cfg in cases:
+        s = presets.PRESETS[key].builder()
+        h = run_historical(s, prices, N, 0.0, mon, 0.0, cf_var)
+        ee = run_historical_exit(s, prices, N, 0.0, cfg, cf_var, h.df["retorno"].to_numpy(), mon)
+        d = ee.df
+        out["saida"]["historico"].append({
+            "preset": key, "N": N, "monitoring": mon, "cfg": vars(cfg),
+            "gatilho": d["gatilho"].astype(int).to_numpy(), "dia_gatilho": d["dia_gatilho"].to_numpy(),
+            "saida": d["saida_antecipada"].astype(int).to_numpy(), "dia_saida": d["dia_saida"].to_numpy(),
+            "retorno_final": d["retorno_final"].to_numpy(), "cdi_periodo": d["cdi_periodo"].to_numpy(),
+            "cdi_inicio": d["cdi_inicio"].to_numpy()})
+    for key, t0, N, cfg in (("protecao_total", "2020-03-02", 120, EarlyExitConfig()),
+                            ("collar", "2020-09-01", 400, EarlyExitConfig(delay=0, exit_spread=0.0))):
+        s = presets.PRESETS[key].builder()
+        x = run_ex_post_exit(s, prices, t0, N, 0.0, cfg, cf_var)
+        out["saida"]["expost"].append({"preset": key, "trade": t0, "N": N, "cfg": vars(cfg),
+                                       "dates": [d.strftime("%Y-%m-%d") for d in x.dates], "ret": x.ret,
+                                       "threshold": x.threshold,
+                                       "trigger": x.trigger_date.strftime("%Y-%m-%d") if x.trigger_date is not None else None,
+                                       "exit": x.exit_date.strftime("%Y-%m-%d") if x.exit_date is not None else None,
+                                       "exit_return": x.exit_return})
+
     # Calendário
     out["calendario"] = {
         "feriados": {str(y): [d.isoformat() for d in b3_holidays(y)] for y in (2025, 2026, 2027)},

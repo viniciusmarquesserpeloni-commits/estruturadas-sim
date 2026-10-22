@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-for (const f of ["legs", "presets", "pricing", "backtest"]) require(`../../site/assets/js/engine/${f}.js`);
+for (const f of ["legs", "presets", "pricing", "backtest", "early"]) require(`../../site/assets/js/engine/${f}.js`);
 const E = globalThis.Estr;
 const FX = JSON.parse(readFileSync(new URL("./fixtures.json", import.meta.url), "utf-8"));
 
@@ -131,4 +131,68 @@ test("JSON: ida e volta mantém o payoff", () => {
   assert.deepEqual(Array.from(E.evaluatePaths(s, rows).payoff), Array.from(E.evaluatePaths(s2, rows).payoff));
   const fromFile = E.fromJSON(readFileSync(new URL("../../presets/protecao_total_bbdc4.json", import.meta.url), "utf-8"));
   assert.deepEqual(fromFile.legs, s.legs);
+});
+
+/* ---------------- Saída antecipada ---------------- */
+const jsCfg = (c) => ({ trigger: c.trigger, exitSpread: c.exit_spread, delay: c.delay, minDays: c.min_days, volMode: c.vol_mode,
+  volWindow: c.vol_window, volAdd: c.vol_add, mcPaths: c.mc_paths, calibrate: c.calibrate });
+
+test("saída antecipada: fórmulas de barreira, marcação e séries iguais ao Python", () => {
+  const S = FX.saida;
+  for (const [kind, barrier, s, K, H, v] of S.barreira) close(E.barrierPrice(kind, barrier, s, K, H, 0.6, 0.11, 0.01, 0.35), v, 1e-10, `${kind} ${barrier} S=${s} K=${K}`);
+  const pt = E.PRESETS.protecao_total.build();
+  for (const [s, mx, mn, T, mon, v] of S.valor) close(E.structureValue(pt, s, mx, mn, T, 0.12, 0.3, mon), v, 1e-10, `valor S=${s}`);
+  closeArr(E.rollingVol(Float64Array.from(FX.prices.c), 63), S.rolling_vol, 1e-9, "vol móvel");
+  closeArr(E.cdiRateSeries(Float64Array.from(S.cdiF)), S.cdi_rate, 1e-10, "taxa CDI");
+});
+
+test("saída antecipada: backtest histórico e ex-post iguais ao Python", () => {
+  const P = { d: FX.prices.d, c: Float64Array.from(FX.prices.c), h: Float64Array.from(FX.prices.h), l: Float64Array.from(FX.prices.l) };
+  const F = Float64Array.from(FX.saida.cdiF);
+  for (const fx of FX.saida.historico) {
+    const s = E.PRESETS[fx.preset].build();
+    const h = E.runHistorical(s, P, fx.N, 0, fx.monitoring, 0, F);
+    const x = E.runHistoricalExit(s, P, fx.N, 0, jsCfg(fx.cfg), F, h.ret, fx.monitoring);
+    const tag = `${fx.preset} N=${fx.N}`;
+    closeArr(Array.from(x.triggered), fx.gatilho, 0, tag + " gatilho");
+    closeArr(Array.from(x.triggerDay), fx.dia_gatilho, 0, tag + " dia gatilho");
+    closeArr(Array.from(x.early), fx.saida, 0, tag + " saída");
+    closeArr(Array.from(x.exitDay), fx.dia_saida, 0, tag + " dia saída");
+    closeArr(x.retFinal, fx.retorno_final, 1e-9, tag + " retorno");
+    closeArr(x.cdiPeriod, fx.cdi_periodo, 1e-10, tag + " cdi");
+    closeArr(x.cdiStart, fx.cdi_inicio, 1e-10, tag + " cdi início");
+    const sm = E.summarizeExit(x);
+    assert.ok(sm.p_saida >= 0 && sm.p_saida <= 1);
+  }
+  for (const fx of FX.saida.expost) {
+    const r = E.runExPostExit(E.PRESETS[fx.preset].build(), P, fx.trade, fx.N, 0, jsCfg(fx.cfg), F);
+    assert.deepEqual(r.dates, fx.dates);
+    closeArr(r.ret, fx.ret, 1e-9, fx.preset + " ret ex-post");
+    closeArr(r.threshold, fx.threshold, 1e-10, fx.preset + " gatilho ex-post");
+    assert.equal(r.triggerDate, fx.trigger); assert.equal(r.exitDate, fx.exit);
+    close(r.exitReturn, fx.exit_return, 1e-9, fx.preset + " retorno de saída");
+  }
+});
+
+test("saída antecipada: regras (delay, carência, vencimento) e Monte Carlo", () => {
+  const s = E.structure("ação", [E.leg("stock")]);
+  const N = 20, P = { d: Array.from({ length: N + 1 }, (_, i) => "2024-01-" + String(i + 1).padStart(2, "0")), c: Float64Array.from({ length: N + 1 }, (_, i) => Math.pow(1.01, i)) };
+  P.h = P.c; P.l = P.c;
+  const F = Float64Array.from({ length: N + 1 }, (_, i) => Math.pow(1.1, i / 252));
+  const hold = [Math.pow(1.01, N) - 1];
+  const run = (cfg) => E.runHistoricalExit(s, P, N, 0, Object.assign({ exitSpread: 0 }, cfg), F, hold);
+  let x = run({});
+  assert.equal(x.triggerDay[0], 1); assert.equal(x.exitDay[0], 2); close(x.retFinal[0], 1.01 ** 2 - 1, 1e-12, "delay 1");
+  x = run({ delay: 0 }); assert.equal(x.exitDay[0], 1);
+  x = run({ minDays: 5 }); assert.equal(x.triggerDay[0], 5); assert.equal(x.exitDay[0], 6);
+  x = run({ exitSpread: 0.03 }); assert.equal(x.triggerDay[0], 4);
+  x = run({ minDays: 19, delay: 1 }); assert.equal(x.triggered[0], 1); assert.equal(x.early[0], 0); assert.equal(x.exitDay[0], N);
+  // Monte Carlo: caminhos completos guardados + saída nos 2.000 primeiros
+  const Pf = { d: FX.prices.d, c: Float64Array.from(FX.prices.c), h: Float64Array.from(FX.prices.h), l: Float64Array.from(FX.prices.l) };
+  const pt = E.PRESETS.protecao_total.build();
+  const mc = E.runMonteCarlo(pt, Pf, 60, 0, { nPaths: 3000, cdiAnnual: 0.1 });
+  assert.equal(mc.sample.length, 2000);
+  const em = E.runMcExit(pt, mc.sample, 60, 0, {}, mc.ret, mc.sigma, 0.1);
+  assert.equal(em.n, 2000);
+  for (let i = 0; i < em.n; i++) if (!em.early[i]) assert.equal(em.retFinal[i], mc.ret[i]);
 });
