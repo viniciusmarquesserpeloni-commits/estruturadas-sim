@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
+from .backtest import regime_factor
 from .legs import Structure, returns_from_payoff
 from .pricing import BGK_BETA, barrier_price, bs_price_vec
 
@@ -177,8 +178,13 @@ def simulate_exit(structure: Structure, close, up, down, cdi_acc, rate, sigma, c
 
 def run_historical_exit(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float,
                         cfg: EarlyExitConfig, cdi_factor, ret_hold, monitoring: str = "close",
-                        extra: float = 0.0) -> EarlyExitResult:
-    """Saída antecipada em todas as janelas históricas (mesmas janelas de ``run_historical``)."""
+                        extra: float = 0.0, cdi_ref: float | None = None,
+                        regime_adjust: bool = False) -> EarlyExitResult:
+    """Saída antecipada em todas as janelas históricas (mesmas janelas de ``run_historical``).
+
+    Com ``regime_adjust`` (e ``cdi_ref``), usa os caminhos re-ancorados no CDI de hoje e o CDI de hoje
+    na régua do gatilho e na marcação — a mesma pergunta "e se eu contratasse agora?" do backtest.
+    ``ret_hold`` deve vir do ``run_historical`` com o mesmo ajuste."""
     N = n_days
     close = prices["Close"].to_numpy(dtype=float)
     high = prices["High"].to_numpy(dtype=float) if "High" in prices else close
@@ -192,22 +198,32 @@ def run_historical_exit(structure: Structure, prices: pd.DataFrame, n_days: int,
     else:
         up = down = S
     F = np.asarray(cdi_factor, dtype=float)
-    cdi_acc = sliding_window_view(F, N + 1) / F[:n, None] - 1.0
-    rate = sliding_window_view(cdi_rate_series(F), N + 1)[:, 1:]
+    rates = cdi_rate_series(F)
+    if regime_adjust and cdi_ref is not None:
+        f = regime_factor(F, N, cdi_ref)[:, 1:]
+        S, up, down = S * f, up * f, down * f
+        k = np.arange(N + 1)
+        cdi_acc = np.repeat(((1 + cdi_ref) ** (k / TRADING_DAYS) - 1)[None, :], n, axis=0)
+        rate = np.full((n, N), np.log1p(cdi_ref))
+        rate0 = np.full(n, np.log1p(cdi_ref))
+    else:
+        cdi_acc = sliding_window_view(F, N + 1) / F[:n, None] - 1.0
+        rate = sliding_window_view(rates, N + 1)[:, 1:]
+        rate0 = rates[:n]
     rv = rolling_vol(close, cfg.vol_window) + cfg.vol_add
     if cfg.vol_mode == "fixed":
         sigma = np.repeat(rv[:n, None], N, axis=1)
     else:
         sigma = sliding_window_view(rv, N + 1)[:, 1:]
-    rates = cdi_rate_series(F)
     df = simulate_exit(structure, S, up, down, cdi_acc, rate, sigma, cost, cfg, ret_hold, monitoring, extra,
-                       rate0=rates[:n], sigma0=rv[:n])
+                       rate0=rate0, sigma0=rv[:n])
     df["cdi_inicio"] = np.expm1(rates[:n])  # CDI anual no início da janela (para separar por regime de juros)
     return EarlyExitResult(df, N, cfg)
 
 
 def run_mc_exit(structure: Structure, paths, n_days: int, cost: float, cfg: EarlyExitConfig, ret_hold,
-                sigma_hist: float, cdi_annual: float, monitoring: str = "close", extra: float = 0.0) -> EarlyExitResult:
+                sigma_hist: float, cdi_annual: float, monitoring: str = "close", extra: float = 0.0,
+                high=None, low=None) -> EarlyExitResult:
     """Saída antecipada nos primeiros ``cfg.mc_paths`` caminhos do Monte Carlo.
 
     Os caminhos só têm fechamentos: com monitoramento intradiário, os toques usam a barreira deslocada
@@ -215,8 +231,12 @@ def run_mc_exit(structure: Structure, paths, n_days: int, cost: float, cfg: Earl
     e CDI constante."""
     paths = np.asarray(paths, dtype=float)[: cfg.mc_paths]
     m, N = paths.shape
-    hit_shift = BGK_BETA * sigma_hist * np.sqrt(1.0 / TRADING_DAYS) if monitoring == "intraday" else 0.0
-    up, down = paths * np.exp(hit_shift), paths * np.exp(-hit_shift)
+    if monitoring == "intraday" and high is not None and low is not None:
+        # bootstrap com máxima/mínima sorteadas: toques pelos extremos do dia, sem correção BGK
+        up, down = np.asarray(high, dtype=float)[:m], np.asarray(low, dtype=float)[:m]
+    else:
+        hit_shift = BGK_BETA * sigma_hist * np.sqrt(1.0 / TRADING_DAYS) if monitoring == "intraday" else 0.0
+        up, down = paths * np.exp(hit_shift), paths * np.exp(-hit_shift)
     k = np.arange(N + 1)
     cdi_acc = np.repeat(((1 + cdi_annual) ** (k / TRADING_DAYS) - 1)[None, :], m, axis=0)
     rate = np.full((m, N), np.log1p(cdi_annual))

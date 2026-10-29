@@ -170,6 +170,13 @@ def fetch_cdi_daily(start: date | str, end: date | str) -> pd.Series | None:
     return s[~s.index.duplicated()].sort_index().dropna()
 
 
+def latest_cdi_annual(cdi_daily: pd.Series | None) -> float | None:
+    """CDI efetivo mais recente em taxa anual base 252: (1 + CDI do último dia)^252 − 1."""
+    if cdi_daily is None or cdi_daily.empty:
+        return None
+    return float((1 + float(cdi_daily.iloc[-1])) ** TRADING_DAYS - 1)
+
+
 def cdi_factor_on_index(index: pd.DatetimeIndex, cdi_daily: pd.Series | None,
                         fallback_annual: float) -> np.ndarray:
     """Fator acumulado do CDI em cada data da série de preços (começa em 1).

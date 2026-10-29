@@ -9,9 +9,42 @@ import pandas as pd
 from .backtest import BacktestResult
 from .formatting import fmt_num, fmt_pct
 from .legs import Structure, expiry_payoff, returns_from_payoff
+from .rng import Mulberry32
 
 TOL = 1e-9
 TRADING_DAYS = 252
+CI_SEED = 2026  # seed fixa dos intervalos de confiança (mesma do motor JS)
+CI_DRAWS = 1000
+
+
+def block_bootstrap_ci(indicator, block: int, n_boot: int = CI_DRAWS, seed: int = CI_SEED,
+                       level: float = 0.95) -> tuple[float, float]:
+    """Intervalo de confiança da média de uma série de indicadores (0/1) de janelas sobrepostas, por
+    moving block bootstrap: sorteia blocos consecutivos de ``block`` janelas (padrão = prazo N, o
+    tamanho da sobreposição) até completar a série, ``n_boot`` vezes, e pega os percentis da média.
+    Usa o gerador mulberry32 (idêntico ao do JS) para dar o mesmo intervalo nos dois motores."""
+    x = np.asarray(indicator, dtype=float)
+    n = len(x)
+    if n == 0:
+        return float("nan"), float("nan")
+    block = int(min(max(1, block), n))
+    m, nb = n - block + 1, int(math.ceil(n / block))
+    csum = np.concatenate([[0.0], np.cumsum(x)])
+    rng = Mulberry32(seed)
+    starts = np.array([rng.int(m) for _ in range(n_boot * nb)], dtype=np.int64).reshape(n_boot, nb)
+    lengths = np.full(nb, block, dtype=np.int64)
+    lengths[-1] = n - block * (nb - 1)
+    means = (csum[starts + lengths] - csum[starts]).sum(axis=1) / n
+    a = (1 - level) / 2 * 100
+    lo, hi = np.percentile(means, [a, 100 - a])
+    return float(lo), float(hi)
+
+
+def cvar(r, q: float = 0.05) -> float:
+    """CVaR (expected shortfall): média dos ``q`` piores resultados (pelo menos um)."""
+    s = np.sort(np.asarray(r, dtype=float))
+    k = max(1, int(math.ceil(q * len(s))))
+    return float(s[:k].mean())
 
 
 def annualize(r: float, n_days: int) -> float:
@@ -45,17 +78,33 @@ def summarize(res: BacktestResult) -> dict:
         "acao_p_lucro": float(np.mean(stock > TOL)),
         "p_bate_acao": float(np.mean(r > stock + TOL)),
         "barreiras": {lbl: float(df[col].mean()) for lbl, col in res.event_cols.items()},
+        "cvar5": cvar(r, 0.05),
     }
+    hit = df["barreira_qualquer"].to_numpy(dtype=bool)
+    out["p_barreira"] = float(hit.mean()) if res.event_cols else float("nan")
     out["media_anual"] = annualize(out["media"], res.n_days)
     out["mediana_anual"] = annualize(out["mediana"], res.n_days)
     out["acao_media_anual"] = annualize(out["acao_media"], res.n_days)
-    if "retorno_cdi" in df:
-        cdi = df["retorno_cdi"].to_numpy(dtype=float)
-        out["p_cdi"] = float(np.mean(r > cdi + TOL))
-        out["cdi_medio"] = float(np.mean(cdi))
+    # régua do CDI: de hoje (padrão) e da época de cada janela (secundária, só no histórico)
+    ref = df["retorno_cdi_hoje"] if "retorno_cdi_hoje" in df else df.get("retorno_cdi")
+    out["p_cdi"] = float(np.mean(r > ref.to_numpy(dtype=float) + TOL)) if ref is not None else float("nan")
+    out["cdi_hoje"] = float(ref.iloc[0]) if ref is not None and "retorno_cdi_hoje" in df else float("nan")
+    if "retorno_cdi" in df and res.kind == "historico":
+        era = df["retorno_cdi"].to_numpy(dtype=float)
+        base = df["retorno_sem_ajuste"].to_numpy(dtype=float) if "retorno_sem_ajuste" in df else r
+        out["p_cdi_epoca"] = float(np.mean(base > era + TOL))
+        out["cdi_medio"] = float(np.mean(era))
         out["cdi_medio_anual"] = annualize(out["cdi_medio"], res.n_days)
     else:
-        out["p_cdi"] = out["cdi_medio"] = out["cdi_medio_anual"] = float("nan")
+        out["p_cdi_epoca"] = out["cdi_medio"] = out["cdi_medio_anual"] = float("nan")
+    out["ci"] = {}
+    if res.kind == "historico":
+        inds = {"p_lucro": r > TOL, "p_perda": r < -TOL}
+        if ref is not None:
+            inds["p_cdi"] = r > ref.to_numpy(dtype=float) + TOL
+        if res.event_cols:
+            inds["p_barreira"] = hit
+        out["ci"] = {k: block_bootstrap_ci(v, res.n_days) for k, v in inds.items()}
     return out
 
 
@@ -63,14 +112,17 @@ _ROWS = [
     ("n", "Nº de janelas / caminhos", "int"),
     ("n_effective", "Amostra efetiva (janelas não sobrepostas)", "int"),
     ("p_lucro", "P(lucro > 0)", "pct"),
-    ("p_cdi", "P(retorno > CDI do período)", "pct"),
+    ("p_cdi", "P(retorno > CDI de hoje)", "pct"),
+    ("p_barreira", "P(barreira acionada)", "pct"),
     ("p_perda", "P(perda)", "pct"),
+    ("p_cdi_epoca", "P(retorno > CDI da época)", "pct"),
     ("p_zero", "P(retorno = 0)", "pct"),
     ("p_max", "P(atingir o retorno máximo)", "pct"),
     ("media", "Retorno médio", "pct"),
     ("media_anual", "Retorno médio anualizado (base 252)", "pct"),
     ("mediana", "Mediana", "pct"),
     ("p5", "Percentil 5", "pct"),
+    ("cvar5", "CVaR 5% (média dos 5% piores)", "pct"),
     ("p25", "Percentil 25", "pct"),
     ("p75", "Percentil 75", "pct"),
     ("p95", "Percentil 95", "pct"),
@@ -81,9 +133,17 @@ _ROWS = [
     ("acao_mediana", "Só a ação: mediana", "pct"),
     ("acao_p_lucro", "Só a ação: P(lucro > 0)", "pct"),
     ("p_bate_acao", "P(estrutura > só a ação)", "pct"),
-    ("cdi_medio", "CDI médio do período", "pct"),
-    ("cdi_medio_anual", "CDI médio anualizado", "pct"),
+    ("cdi_hoje", "CDI de hoje no prazo", "pct"),
+    ("cdi_medio", "CDI médio da época (janelas)", "pct"),
+    ("cdi_medio_anual", "CDI médio da época, anualizado", "pct"),
 ]
+
+
+def fmt_ci(v, ci) -> str:
+    """'56,0% (IC 48–64%)'."""
+    if ci is None or not all(math.isfinite(x) for x in ci):
+        return _fmt(v, "pct")
+    return f"{fmt_pct(v, 1)} (IC {fmt_num(100 * ci[0], 0)}–{fmt_num(100 * ci[1], 0)}%)"
 
 
 def _fmt(v, kind: str) -> str:
@@ -102,7 +162,8 @@ def comparison_table(summaries: dict[str, dict]) -> pd.DataFrame:
     rows, index = [], []
     for key, name, kind in _ROWS:
         index.append(name)
-        rows.append([_fmt(s.get(key), kind) for s in summaries.values()])
+        rows.append([fmt_ci(s.get(key), s.get("ci", {}).get(key)) if key in s.get("ci", {}) else _fmt(s.get(key), kind)
+                     for s in summaries.values()])
         if key == "p_max":
             for lbl in labels:
                 index.append(f"Barreira acionada ({lbl})")
@@ -167,7 +228,9 @@ def summarize_exit(res) -> dict:
     with np.errstate(divide="ignore", invalid="ignore"):
         pct_cdi = np.where(cdi > 0, r / cdi, np.nan)
     q = np.percentile(exit_days, [25, 50, 75]) if early.any() else [np.nan] * 3
+    ci = {"p_saida": block_bootstrap_ci(early.astype(float), N)} if "cdi_inicio" in df else {}
     return {
+        "ci": ci, "cvar5": cvar(r, 0.05),
         "n": len(r),
         "p_gatilho": float(df["gatilho"].mean()),
         "p_saida": float(early.mean()),

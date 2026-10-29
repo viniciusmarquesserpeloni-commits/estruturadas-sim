@@ -12,7 +12,8 @@ from .legs import (Evaluation, Structure, event_label, evaluate_paths, first_hit
                    payoff_profile_summary, returns_from_payoff)
 from .pricing import BGK_BETA, gbm_paths
 
-DRIFT_LABELS = {"historico": "Histórico", "zero": "Zero", "cdi": "CDI"}
+DRIFT_LABELS = {"cdi": "CDI", "cdi_premio": "CDI + prêmio", "zero": "Zero", "historico": "Histórico (média do período)",
+                "personalizado": "Personalizado"}
 MC_METHOD_LABELS = {"bootstrap": "Bootstrap em blocos", "gbm": "GBM (log-normal)"}
 EXIT_PATHS = 2000  # caminhos guardados para a simulação da saída antecipada
 
@@ -82,24 +83,50 @@ def _results_frame(structure: Structure, ev: Evaluation, cost: float, extra_cost
     return df
 
 
+def regime_factor(cdi_factor, n_days: int, cdi_ref: float) -> np.ndarray:
+    """Fator de ajuste de regime de juros por janela e dia, (n, N+1):
+
+    f[t, k] = (1 + cdi_ref)^(k/252) / (CDI acumulado de t a t+k na época).
+
+    Multiplicar o caminho por f preserva o excesso de retorno da ação sobre o CDI de cada época e
+    o re-ancora no CDI de hoje (responde "e se eu contratasse agora, com os juros de hoje?")."""
+    F = np.asarray(cdi_factor, dtype=float)
+    n = len(F) - n_days
+    k = np.arange(n_days + 1)
+    return (1 + cdi_ref) ** (k / TRADING_DAYS) / (sliding_window_view(F, n_days + 1) / F[:n, None])
+
+
 def run_historical(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float,
                    monitoring: str = "close", extra_cost: float = 0.0,
-                   cdi_factor: np.ndarray | None = None) -> BacktestResult:
+                   cdi_factor: np.ndarray | None = None, cdi_ref: float | None = None,
+                   regime_adjust: bool = False) -> BacktestResult:
     """Aplica a estrutura (mesmos parâmetros em %) em todas as janelas históricas.
 
-    ``cdi_factor``: fator acumulado do CDI alinhado ao índice de ``prices``."""
+    ``cdi_factor``: fator acumulado do CDI alinhado ao índice de ``prices``; ``cdi_ref``: CDI de
+    referência (hoje, efetivo anual base 252). Com ``regime_adjust`` (exige os dois), os caminhos
+    de fechamento, máxima e mínima são multiplicados por ``regime_factor``."""
     w = historical_windows(prices, n_days)
-    ev = evaluate_paths(structure, w.close, w.high, w.low, monitoring)
+    adjust = bool(regime_adjust and cdi_factor is not None and cdi_ref is not None)
+    close, high, low = w.close, w.high, w.low
+    if adjust:
+        f = regime_factor(cdi_factor, n_days, cdi_ref)[:, 1:]
+        close, high, low = close * f, high * f, low * f
+    ev = evaluate_paths(structure, close, high, low, monitoring)
     df = _results_frame(structure, ev, cost, extra_cost)
+    if adjust:
+        raw = evaluate_paths(structure, w.close, w.high, w.low, monitoring)
+        df["retorno_sem_ajuste"] = returns_from_payoff(raw.payoff, cost, structure.has_stock, extra_cost)
     df.insert(0, "data_inicio", w.start_dates)
     df.insert(1, "data_fim", w.end_dates)
     if cdi_factor is not None:
         cf = np.asarray(cdi_factor, dtype=float)
         df["retorno_cdi"] = cf[n_days:] / cf[: len(cf) - n_days] - 1.0
+    if cdi_ref is not None:
+        df["retorno_cdi_hoje"] = (1 + cdi_ref) ** (n_days / TRADING_DAYS) - 1.0
     n = len(df)
     return BacktestResult(df, _event_columns(structure), n_days, int(np.ceil(n / n_days)),
                           _return_max(structure, cost, extra_cost), "historico",
-                          {"monitoring": monitoring})
+                          {"monitoring": monitoring, "regime_adjust": adjust, "cdi_ref": cdi_ref})
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +138,45 @@ def log_returns(prices: pd.DataFrame) -> np.ndarray:
     return lr[np.isfinite(lr)]
 
 
-def block_bootstrap_paths(lr: np.ndarray, n_paths: int, n_days: int, block: int = 20,
-                          seed: int = 42) -> np.ndarray:
-    """Bootstrap circular em blocos dos log-retornos diários: preserva parte da
-    autocorrelação e da aglomeração de volatilidade."""
+def ohlc_log_returns(prices: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Log-retornos de fechamento e, para cada dia, a distância da máxima e da mínima ao fechamento:
+    lr_t = ln(C_t/C_{t-1}), up_t = ln(H_t/C_t) ≥ 0, dn_t = ln(L_t/C_t) ≤ 0 (sorteados juntos no bootstrap)."""
+    c = prices["Close"].to_numpy(dtype=float)
+    h = prices["High"].to_numpy(dtype=float) if "High" in prices else c
+    lo = prices["Low"].to_numpy(dtype=float) if "Low" in prices else c
+    lr = np.diff(np.log(c))
+    up = np.maximum(np.log(h[1:] / c[1:]), 0.0)
+    dn = np.minimum(np.log(lo[1:] / c[1:]), 0.0)
+    ok = np.isfinite(lr) & np.isfinite(up) & np.isfinite(dn)
+    return lr[ok], up[ok], dn[ok]
+
+
+def drift_annual(drift: str, cdi_annual: float, premium: float = 0.05, custom: float | None = None) -> float | None:
+    """Retorno esperado anual da ação usado no Monte Carlo (None = média histórica do período).
+
+    * cdi (padrão): a ação rende, em média, o CDI de referência — visão neutra;
+    * cdi_premio: CDI + prêmio (padrão 5 p.p.); * zero: retorno esperado nulo;
+    * historico: média dos log-retornos do período (erro padrão ≈ σ/√anos: pouco confiável);
+    * personalizado: valor informado."""
+    if drift == "cdi":
+        return cdi_annual
+    if drift == "cdi_premio":
+        return cdi_annual + premium
+    if drift == "zero":
+        return 0.0
+    if drift == "personalizado":
+        return cdi_annual if custom is None else custom
+    if drift == "historico":
+        return None
+    raise ValueError(f"Drift inválido: {drift}")
+
+
+def bootstrap_ohlc_paths(lr: np.ndarray, n_paths: int, n_days: int, block: int = 20, seed: int = 42,
+                         drift_daily: float | None = None, scale: float = 1.0, up=None, dn=None):
+    """Bootstrap circular em blocos dos log-retornos diários (preserva parte da autocorrelação e da
+    aglomeração de volatilidade). Opcionalmente troca a média por ``drift_daily`` e escala os desvios
+    por ``scale``: lr* = drift_daily + scale·(lr − média). Com ``up``/``dn``, sorteia junto a máxima
+    e a mínima de cada dia (escaladas por ``scale``). Devolve (fechamento, máxima, mínima)."""
     if len(lr) < 2:
         raise ValueError("Histórico insuficiente para o bootstrap.")
     block = int(max(1, min(block, len(lr))))
@@ -122,53 +184,102 @@ def block_bootstrap_paths(lr: np.ndarray, n_paths: int, n_days: int, block: int 
     n_blocks = int(np.ceil(n_days / block))
     starts = rng.integers(0, len(lr), size=(n_paths, n_blocks))
     idx = (starts[:, :, None] + np.arange(block)[None, None, :]) % len(lr)
-    sampled = lr[idx.reshape(n_paths, n_blocks * block)[:, :n_days]]
-    return np.exp(np.cumsum(sampled, axis=1))
+    idx = idx.reshape(n_paths, n_blocks * block)[:, :n_days]
+    if drift_daily is None and scale == 1.0:
+        base = lr
+    else:
+        m = float(np.mean(lr))
+        base = (m if drift_daily is None else drift_daily) + scale * (lr - m)
+    log_close = np.cumsum(base[idx], axis=1)
+    close = np.exp(log_close)
+    if up is None:
+        return close, close, close
+    return close, np.exp(log_close + scale * np.asarray(up)[idx]), np.exp(log_close + scale * np.asarray(dn)[idx])
 
 
-def gbm_drift_daily(lr: np.ndarray, sigma: float, drift: str, cdi_annual: float) -> float:
-    """Drift logarítmico diário do GBM.
+def block_bootstrap_paths(lr: np.ndarray, n_paths: int, n_days: int, block: int = 20,
+                          seed: int = 42) -> np.ndarray:
+    """Bootstrap circular em blocos dos log-retornos diários, sem ajuste de média (só fechamentos)."""
+    return bootstrap_ohlc_paths(lr, n_paths, n_days, block, seed)[0]
 
-    * historico: média dos log-retornos diários históricos;
-    * zero: retorno esperado aritmético zero (log-drift = −σ²/2);
-    * cdi: retorno esperado aritmético igual ao CDI."""
-    dt = 1.0 / TRADING_DAYS
-    if drift == "historico":
+
+def bootstrap_drift_daily(lr: np.ndarray, mu: float | None, scale: float = 1.0) -> float | None:
+    """Drift diário do bootstrap para que E[S_T] ≈ (1 + mu)^(N/252): ln(1+mu)/252 − ½·scale²·var(lr)."""
+    if mu is None:
+        return None
+    return float(np.log1p(mu) / TRADING_DAYS - 0.5 * scale**2 * float(np.var(lr, ddof=1)))
+
+
+def gbm_drift_daily(lr: np.ndarray, sigma: float, drift: str, cdi_annual: float, premium: float = 0.05,
+                    custom: float | None = None) -> float:
+    """Drift logarítmico diário do GBM: (ln(1 + mu) − σ²/2)·Δt, ou a média histórica (``historico``)."""
+    mu = drift_annual(drift, cdi_annual, premium, custom)
+    if mu is None:
         return float(np.mean(lr))
-    if drift == "zero":
-        return -0.5 * sigma**2 * dt
-    if drift == "cdi":
-        return (np.log1p(cdi_annual) - 0.5 * sigma**2) * dt
-    raise ValueError(f"Drift inválido: {drift}")
+    return float((np.log1p(mu) - 0.5 * sigma**2) / TRADING_DAYS)
 
 
 def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float,
                     method: str = "bootstrap", n_paths: int = 10_000, block: int = 20,
-                    drift: str = "historico", cdi_annual: float = 0.10, seed: int = 42,
+                    drift: str = "cdi", cdi_annual: float = 0.10, seed: int = 42,
                     monitoring: str = "close", extra_cost: float = 0.0,
-                    vol_window: int | None = None) -> BacktestResult:
+                    vol_window: int | None = None, premium: float = 0.05, custom: float | None = None,
+                    vol_scale: float = 1.0) -> BacktestResult:
     """Simula caminhos a partir do histórico e aplica a estrutura.
 
-    No MC só há fechamentos; com monitoramento intradiário aplica-se a correção
-    de Broadie-Glasserman-Kou (barreira deslocada em 0,5826·σ·√Δt)."""
-    lr = log_returns(prices)
-    sigma = float(np.std(lr[-vol_window:] if vol_window else lr, ddof=1) * np.sqrt(TRADING_DAYS))
+    Bootstrap: sorteia blocos de dias reais (fechamento, máxima e mínima juntos), com a média trocada
+    pelo drift escolhido e os desvios escalados por ``vol_scale``; com monitoramento intradiário usa a
+    máxima/mínima sorteadas. GBM: só fechamentos; intradiário pela correção de Broadie-Glasserman-Kou."""
+    lr, up, dn = ohlc_log_returns(prices)
+    sigma_base = float(np.std(lr[-vol_window:] if vol_window else lr, ddof=1) * np.sqrt(TRADING_DAYS))
+    sigma = sigma_base * vol_scale
+    mu = drift_annual(drift, cdi_annual, premium, custom)
+    high = low = None
     if method == "bootstrap":
-        paths = block_bootstrap_paths(lr, n_paths, n_days, block, seed)
+        close, high, low = bootstrap_ohlc_paths(lr, n_paths, n_days, block, seed,
+                                                bootstrap_drift_daily(lr, mu, vol_scale), vol_scale, up, dn)
+        ev = evaluate_paths(structure, close, high, low, monitoring)
     elif method == "gbm":
-        mu = gbm_drift_daily(lr, sigma, drift, cdi_annual)
-        paths = gbm_paths(n_paths, n_days, sigma, mu, seed, antithetic=True)
+        close = gbm_paths(n_paths, n_days, sigma, gbm_drift_daily(lr, sigma, drift, cdi_annual, premium, custom),
+                          seed, antithetic=True)
+        shift = BGK_BETA * sigma * np.sqrt(1.0 / TRADING_DAYS) if monitoring == "intraday" else 0.0
+        ev = evaluate_paths(structure, close, monitoring="close", barrier_shift=shift)
     else:
         raise ValueError(f"Método inválido: {method}")
-    shift = BGK_BETA * sigma * np.sqrt(1.0 / TRADING_DAYS) if monitoring == "intraday" else 0.0
-    ev = evaluate_paths(structure, paths, monitoring="close", barrier_shift=shift)
     df = _results_frame(structure, ev, cost, extra_cost)
     df["retorno_cdi"] = (1 + cdi_annual) ** (n_days / TRADING_DAYS) - 1
-    meta = {"method": method, "sigma": sigma, "drift": drift, "block": block, "seed": seed,
-            "monitoring": monitoring, "paths_sample": paths[: min(200, len(paths))],
-            "paths_exit": paths[: min(EXIT_PATHS, len(paths))]}
+    df["retorno_cdi_hoje"] = df["retorno_cdi"]
+    k = min(EXIT_PATHS, len(close))
+    meta = {"method": method, "sigma": sigma, "sigma_base": sigma_base, "vol_scale": vol_scale, "drift": drift,
+            "mu": mu, "premium": premium, "block": block, "seed": seed, "monitoring": monitoring,
+            "paths_sample": close[: min(200, len(close))], "paths_exit": close[:k],
+            "paths_exit_high": None if high is None else high[:k], "paths_exit_low": None if low is None else low[:k]}
     return BacktestResult(df, _event_columns(structure), n_days, len(df),
                           _return_max(structure, cost, extra_cost), "mc", meta)
+
+
+SCENARIO_VOLS = (0.8, 1.0, 1.2)
+SCENARIO_DRIFTS = ("zero", "cdi", "cdi_premio")
+
+
+def run_scenarios(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float, method: str = "bootstrap",
+                  block: int = 20, cdi_annual: float = 0.10, seed: int = 42, monitoring: str = "close",
+                  extra_cost: float = 0.0, premium: float = 0.05, n_paths: int = 2000,
+                  vol_scales=SCENARIO_VOLS) -> pd.DataFrame:
+    """Grade de premissas do Monte Carlo (incerteza de premissa, não de sorteio): drift ∈ {zero, CDI,
+    CDI + prêmio} × vol ∈ {0,8; 1,0; 1,2} × a vol de base, com os mesmos números aleatórios."""
+    rows = []
+    for drift in SCENARIO_DRIFTS:
+        for vs in vol_scales:
+            r = run_monte_carlo(structure, prices, n_days, cost, method, n_paths, block, drift, cdi_annual, seed,
+                                monitoring, extra_cost, premium=premium, vol_scale=vs)
+            d = r.df
+            rows.append({"drift": drift, "mu": r.meta["mu"], "vol_scale": vs, "sigma": r.meta["sigma"],
+                         "p_lucro": float((d["retorno"] > 1e-9).mean()),
+                         "p_cdi": float((d["retorno"] > d["retorno_cdi_hoje"] + 1e-9).mean()),
+                         "p_barreira": float(d["barreira_qualquer"].mean()) if len(structure.events) else float("nan"),
+                         "media": float(d["retorno"].mean())})
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
