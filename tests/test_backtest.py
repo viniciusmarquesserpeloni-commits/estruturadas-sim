@@ -152,3 +152,13 @@ def test_data_helpers():
     idx = pd.bdate_range("2025-11-17", "2025-11-28")
     n, obs = term_from_dates("2025-11-19", "2025-11-26", idx)
     assert obs == pd.Timestamp("2025-11-25") and n == 4  # 20, 21, 24, 25 (série sem feriados)
+
+
+def test_clean_prices_replaces_zero_high_low():
+    # pregão em andamento: o Yahoo devolve máxima/mínima = 0; não pode virar toque de barreira
+    from estruturadas.data import clean_prices
+    idx = pd.bdate_range("2026-10-26", periods=3)
+    df = pd.DataFrame({"Close": [10.0, 10.5, 9.8], "High": [10.4, 10.9, 0.0], "Low": [9.7, 10.1, 0.0]}, index=idx)
+    out = clean_prices(df)
+    assert out["High"].iloc[-1] == 9.8 and out["Low"].iloc[-1] == 9.8
+    assert (out["High"] >= out["Close"]).all() and (out["Low"] <= out["Close"]).all()

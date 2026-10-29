@@ -264,7 +264,7 @@ SCENARIO_DRIFTS = ("zero", "cdi", "cdi_premio")
 
 def run_scenarios(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float, method: str = "bootstrap",
                   block: int = 20, cdi_annual: float = 0.10, seed: int = 42, monitoring: str = "close",
-                  extra_cost: float = 0.0, premium: float = 0.05, n_paths: int = 2000,
+                  extra_cost: float = 0.0, premium: float = 0.05, n_paths: int = 5000,
                   vol_scales=SCENARIO_VOLS) -> pd.DataFrame:
     """Grade de premissas do Monte Carlo (incerteza de premissa, não de sorteio): drift ∈ {zero, CDI,
     CDI + prêmio} × vol ∈ {0,8; 1,0; 1,2} × a vol de base, com os mesmos números aleatórios."""

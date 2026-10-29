@@ -25,7 +25,7 @@
               <div class="seg" role="group" aria-label="Definir prazo por">
                 ${[["meses", "Meses"], ["du", "Dias úteis"], ["datas", "Datas"]].map(([k, l]) => `<button type="button" data-term="${k}" aria-pressed="${t.mode === k}">${l}</button>`).join("")}
               </div>
-              ${t.mode === "meses" ? `<input class="input num" id="p-months" value="${t.months}" inputmode="numeric" aria-label="Meses" style="max-width:80px"> <span class="small muted">× 21 du</span>`
+              ${t.mode === "meses" ? `<div class="seg" role="group" aria-label="Vértices">${[3, 6, 9, 12].map((m) => `<button type="button" data-months="${m}" aria-pressed="${t.months === m}">${m}m</button>`).join("")}</div><input class="input num" id="p-months" value="${t.months}" inputmode="numeric" aria-label="Meses" title="Outro prazo, em meses (× 21 pregões)" style="max-width:56px">`
                 : t.mode === "du" ? `<input class="input num" id="p-du" value="${t.du}" inputmode="numeric" aria-label="Dias úteis" style="max-width:90px">`
                 : `<input class="input" type="date" id="p-trade" value="${t.trade || ""}" aria-label="Contratação" title="Contratação"><input class="input" type="date" id="p-expiry" value="${t.expiry || ""}" aria-label="Vencimento" title="Vencimento">`}
             </div>
@@ -58,6 +58,8 @@
       <div class="f-group"><span class="f-label">Histórico de preços</span>
         <label class="fl">Desde <input class="input" type="date" id="a-start" value="${adv.start}"></label>
         <label class="fl">Preço ${sel("a-adj", [["1", "Ajustado por proventos"], ["0", "Bruto (sem ajuste)"]], adv.adjusted ? 1 : 0)}</label>
+        <label class="fl">Ajustar ao CDI de hoje ${sel("a-reg", [["1", "Sim (recomendado)"], ["0", "Não (CDI da época)"]], adv.regimeAdjust ? 1 : 0)}</label>
+        <div class="hint">Re-ancora cada janela no CDI de hoje, preservando o excesso de retorno da ação sobre o CDI da época: responde “e se eu contratasse agora?”.</div>
         <div class="hint">As lâminas ajustam strikes e barreiras em eventos corporativos; o preço ajustado é a aproximação padrão.</div>
         <label class="fl">Arquivo CSV <input type="file" id="a-csv" accept=".csv,.txt" class="input" style="padding:4px"></label>
         ${App.csv ? `<div class="hint">Usando CSV enviado (${F.int(App.csv.d.length)} pregões). <a href="#" id="a-csv-rm">Voltar às ações da base</a></div>` : `<div class="hint">Colunas Date, Close[, High, Low] — para ações fora da lista.</div>`}
@@ -69,14 +71,18 @@
       </div>
       <div class="f-group"><span class="f-label">Precificação (modo Teórico)</span>
         <label class="fl">Volatilidade (% a.a.) <input class="input num" id="a-vol" value="${pctIn(adv.vol)}" placeholder="${isFinite(ctx.histVol) ? F.num(ctx.histVol * 100, 2) + " (hist.)" : "automática"}" inputmode="decimal"></label>
-        <label class="fl">Taxa livre de risco / CDI (% a.a.) <input class="input num" id="a-rate" value="${pctIn(adv.rate)}" placeholder="${App.data.index && App.data.index.selic_meta != null ? F.num(App.data.index.selic_meta * 100, 2) + " (Selic)" : "10,00"}" inputmode="decimal"></label>
+        <label class="fl">CDI de referência (% a.a.) <input class="input num" id="a-rate" value="${pctIn(adv.rate)}" placeholder="${App.cdiAtual() != null ? F.num(App.cdiAtual() * 100, 2) + " (atual)" : "10,00"}" inputmode="decimal" title="Use o DI futuro do vencimento, se souber"></label>
         <label class="fl">Dividend yield (% a.a.) <input class="input num" id="a-q" value="${pctIn(adv.q)}" inputmode="decimal"></label>
         <label class="fl">Caminhos do MC (barreiras) ${sel("a-pp", [[20000, "20.000"], [50000, "50.000"], [100000, "100.000"], [200000, "200.000"]], adv.pricingPaths)}</label>
         <div class="hint">Em branco = automático: vol histórica de 252 pregões e Selic meta (BCB).</div>
       </div>
       <div class="f-group"><span class="f-label">Monte Carlo (backtest)</span>
         <label class="fl">Método ${sel("a-mcm", [["bootstrap", "Bootstrap em blocos"], ["gbm", "GBM (log-normal)"]], adv.mcMethod)}</label>
-        ${adv.mcMethod === "gbm" ? `<label class="fl">Drift ${sel("a-drift", [["historico", "Histórico"], ["zero", "Zero"], ["cdi", "CDI"]], adv.mcDrift)}</label>` : `<label class="fl">Bloco (dias) <input class="input num" id="a-block" value="${adv.mcBlock}" inputmode="numeric"></label>`}
+        <label class="fl">Retorno esperado da ação ${sel("a-drift", Object.entries(E.DRIFT_LABELS), adv.mcDrift)}</label>
+        ${adv.mcDrift === "cdi_premio" ? `<label class="fl">Prêmio sobre o CDI (p.p. a.a.) <input class="input num" id="a-prem" value="${pctIn(adv.mcPremium)}" inputmode="decimal"></label>` : ""}
+        ${adv.mcDrift === "personalizado" ? `<label class="fl">Retorno esperado (% a.a.) <input class="input num" id="a-custom" value="${pctIn(adv.mcCustom)}" inputmode="decimal"></label>` : ""}
+        ${adv.mcDrift === "historico" ? `<div class="hint">Média do período: estatisticamente pouco confiável (erro padrão ≈ σ/√anos, cerca de ±8 p.p. a.a.).</div>` : ""}
+        ${adv.mcMethod === "bootstrap" ? `<label class="fl">Bloco (dias) <input class="input num" id="a-block" value="${adv.mcBlock}" inputmode="numeric"></label>` : ""}
         <label class="fl">Nº de caminhos ${sel("a-mcp", [[1000, "1.000"], [5000, "5.000"], [10000, "10.000"], [20000, "20.000"], [50000, "50.000"]], adv.mcPaths)}</label>
         <label class="fl">Seed <input class="input num" id="a-seed" value="${adv.mcSeed}" inputmode="numeric"></label>
         <button class="btn ghost sm" type="button" id="a-reset" style="padding-left:0">Restaurar todos os padrões</button>
@@ -141,6 +147,7 @@
     root.querySelectorAll("[data-term]").forEach((b) => b.addEventListener("click", () => { App.update({ term: Object.assign({}, App.state.term, { mode: b.dataset.term }) }); render(); }));
     const termIn = (id, key, parse) => { const el = $(id); if (el) el.addEventListener("change", () => { const v = parse(el.value); if (v != null) App.update({ term: Object.assign({}, App.state.term, { [key]: v }) }); }); };
     termIn("p-months", "months", (v) => { const n = App.parseNum(v); return n > 0 ? Math.round(n) : null; });
+    root.querySelectorAll("[data-months]").forEach((b) => b.addEventListener("click", () => { App.update({ term: Object.assign({}, App.state.term, { months: +b.dataset.months }) }); render(); }));
     termIn("p-du", "du", (v) => { const n = App.parseNum(v); return n > 0 ? Math.round(n) : null; });
     termIn("p-trade", "trade", (v) => v || null);
     termIn("p-expiry", "expiry", (v) => v || null);
@@ -154,6 +161,7 @@
     if (!App.state.advOpen) return;
     $("a-start").addEventListener("change", (e) => e.target.value && setAdv({ start: e.target.value }));
     $("a-adj").addEventListener("change", (e) => setAdv({ adjusted: e.target.value === "1" }));
+    $("a-reg").addEventListener("change", (e) => setAdv({ regimeAdjust: e.target.value === "1" }));
     $("a-mon").addEventListener("change", (e) => setAdv({ monitoring: e.target.value }));
     $("a-extra").addEventListener("change", (e) => setAdv({ extra: optPct(e.target.value) || 0 }));
     $("a-vol").addEventListener("change", (e) => setAdv({ vol: optPct(e.target.value) }));
@@ -161,7 +169,9 @@
     $("a-q").addEventListener("change", (e) => setAdv({ q: optPct(e.target.value) || 0 }));
     $("a-pp").addEventListener("change", (e) => setAdv({ pricingPaths: +e.target.value }));
     $("a-mcm").addEventListener("change", (e) => { setAdv({ mcMethod: e.target.value }); render(); });
-    if ($("a-drift")) $("a-drift").addEventListener("change", (e) => setAdv({ mcDrift: e.target.value }));
+    if ($("a-drift")) $("a-drift").addEventListener("change", (e) => { setAdv({ mcDrift: e.target.value }); render(); });
+    if ($("a-prem")) $("a-prem").addEventListener("change", (e) => { const v = optPct(e.target.value); if (v != null) setAdv({ mcPremium: v }); });
+    if ($("a-custom")) $("a-custom").addEventListener("change", (e) => setAdv({ mcCustom: optPct(e.target.value) }));
     if ($("a-block")) $("a-block").addEventListener("change", (e) => { const v = App.parseNum(e.target.value); if (v >= 1) setAdv({ mcBlock: Math.round(v) }); });
     $("a-mcp").addEventListener("change", (e) => setAdv({ mcPaths: +e.target.value }));
     $("a-seed").addEventListener("change", (e) => { const v = App.parseNum(e.target.value); if (v != null) setAdv({ mcSeed: Math.round(v) }); });

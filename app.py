@@ -4,7 +4,7 @@ Rodar:  streamlit run app.py
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +14,8 @@ import streamlit as st
 from estruturadas import charts, data
 from estruturadas import io as sio
 from estruturadas import presets
-from estruturadas.backtest import DRIFT_LABELS, MC_METHOD_LABELS, run_ex_post, run_historical, run_monte_carlo
+from estruturadas.backtest import (DRIFT_LABELS, MC_METHOD_LABELS, SCENARIO_DRIFTS, SCENARIO_VOLS, run_ex_post,
+                                   run_historical, run_monte_carlo, run_scenarios)
 from estruturadas.early_exit import (VOL_MODE_LABELS, EarlyExitConfig, run_ex_post_exit, run_historical_exit,
                                      run_mc_exit)
 from estruturadas.formatting import fmt_brl, fmt_level, fmt_num, fmt_pct
@@ -58,8 +59,18 @@ def cached_selic() -> float | None:
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _cached_cdi_strict(start: date, end: date) -> pd.Series:
+    s = data.fetch_cdi_daily(start, end)
+    if s is None:
+        raise ConnectionError("CDI indisponível no BCB")  # exceção não entra no cache: tenta de novo na próxima
+    return s
+
+
 def cached_cdi(start: date, end: date) -> pd.Series | None:
-    return data.fetch_cdi_daily(start, end)
+    try:
+        return _cached_cdi_strict(start, end)
+    except ConnectionError:
+        return None
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -76,29 +87,38 @@ def cached_pricing(struct_json: str, sigma: float, r: float, q: float, n_days: i
 
 @st.cache_data(show_spinner=False, max_entries=16)
 def cached_historical(struct_json: str, prices: pd.DataFrame, n_days: int, cost: float, monitoring: str,
-                      extra_cost: float, cdi_factor: np.ndarray):
-    return run_historical(sio.loads(struct_json), prices, n_days, cost, monitoring, extra_cost, cdi_factor)
+                      extra_cost: float, cdi_factor: np.ndarray, cdi_ref: float, regime_adjust: bool):
+    return run_historical(sio.loads(struct_json), prices, n_days, cost, monitoring, extra_cost, cdi_factor,
+                          cdi_ref, regime_adjust)
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
 def cached_mc(struct_json: str, prices: pd.DataFrame, n_days: int, cost: float, method: str, n_paths: int,
-              block: int, drift: str, cdi_annual: float, seed: int, monitoring: str, extra_cost: float):
+              block: int, drift: str, cdi_annual: float, seed: int, monitoring: str, extra_cost: float,
+              premium: float, custom: float | None):
     return run_monte_carlo(sio.loads(struct_json), prices, n_days, cost, method, n_paths, block, drift,
-                           cdi_annual, seed, monitoring, extra_cost)
+                           cdi_annual, seed, monitoring, extra_cost, premium=premium, custom=custom)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_scen(struct_json: str, prices: pd.DataFrame, n_days: int, cost: float, method: str, block: int,
+                cdi_annual: float, seed: int, monitoring: str, extra_cost: float, premium: float):
+    return run_scenarios(sio.loads(struct_json), prices, n_days, cost, method, block, cdi_annual, seed, monitoring,
+                         extra_cost, premium)
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
 def cached_hexit(struct_json: str, prices: pd.DataFrame, n_days: int, cost: float, cfg: dict, cdi_factor: np.ndarray,
-                 ret_hold: np.ndarray, monitoring: str, extra_cost: float):
+                 ret_hold: np.ndarray, monitoring: str, extra_cost: float, cdi_ref: float, regime_adjust: bool):
     return run_historical_exit(sio.loads(struct_json), prices, n_days, cost, EarlyExitConfig(**cfg), cdi_factor,
-                               ret_hold, monitoring, extra_cost)
+                               ret_hold, monitoring, extra_cost, cdi_ref, regime_adjust)
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
 def cached_mcexit(struct_json: str, paths: np.ndarray, n_days: int, cost: float, cfg: dict, ret_hold: np.ndarray,
-                  sigma: float, cdi_annual: float, monitoring: str, extra_cost: float):
+                  sigma: float, cdi_annual: float, monitoring: str, extra_cost: float, high, low):
     return run_mc_exit(sio.loads(struct_json), paths, n_days, cost, EarlyExitConfig(**cfg), ret_hold, sigma, cdi_annual,
-                       monitoring, extra_cost)
+                       monitoring, extra_cost, high, low)
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +195,12 @@ def on_preset_change() -> None:
 
 def init_state() -> None:
     if "base_structure" not in st.session_state:
-        st.session_state.preset_select = "protecao_total"
+        # padrão: estrutura típica de 3 meses; a lâmina Proteção Total BBDC4 segue disponível como preset
+        st.session_state.preset_select = "collar_ki"
         st.session_state.ticker = "BBDC4"
         st.session_state.cost_informed = 0.0
-        st.session_state.term_mode = "Datas"
-        load_structure(presets.protecao_total_bbdc4())
+        st.session_state.term_mode = "Meses"
+        load_structure(presets.collar_ki(1.0, 1.06, 1.12))
 
 
 init_state()
@@ -243,7 +264,11 @@ sb.header("3. Prazo")
 term_mode = sb.radio("Definir prazo por", ["Meses", "Dias úteis", "Datas"], key="term_mode", horizontal=True)
 obs_date = None
 if term_mode == "Meses":
-    months = sb.number_input("Meses (1 mês = 21 dias úteis)", min_value=1, max_value=120, value=12, step=1)
+    vertice = sb.radio("Vértice", ["3 meses", "6 meses", "9 meses", "12 meses", "Outro"], horizontal=True)
+    if vertice == "Outro":
+        months = sb.number_input("Meses (1 mês = 21 dias úteis)", min_value=1, max_value=120, value=3, step=1)
+    else:
+        months = int(vertice.split()[0])
     n_days = int(months * 21)
 elif term_mode == "Dias úteis":
     n_days = int(sb.number_input("Dias úteis (pregões)", min_value=1, max_value=2520, value=252, step=1))
@@ -286,13 +311,16 @@ with sb.expander("Parâmetros de precificação", expanded=cost_mode == "Teóric
     vol_default = round(100 * hist_vol, 2) if np.isfinite(hist_vol) else 30.0
     vol_pct = st.number_input("Volatilidade (% a.a.)", min_value=1.0, max_value=300.0, value=float(vol_default),
                               step=0.5, help="Padrão: vol histórica anualizada dos últimos 252 pregões.")
-    rate_default = round(100 * selic, 2) if selic is not None else 10.0
-    rate_pct = st.number_input("Taxa livre de risco / CDI (% a.a.)", min_value=0.0, max_value=100.0,
+    cdi_now = data.latest_cdi_annual(cached_cdi(date.today() - timedelta(days=20), date.today()))
+    rate_default = (round(100 * cdi_now, 2) if cdi_now is not None
+                    else round(100 * selic - 0.10, 2) if selic is not None else 10.0)
+    rate_pct = st.number_input("CDI de referência (% a.a.)", min_value=0.0, max_value=100.0,
                                value=float(rate_default), step=0.25,
-                               help="Padrão: Selic meta (API SGS do BCB, série 432). Usada também como CDI no "
-                                    "Monte Carlo e como fallback do CDI histórico.")
-    if selic is None:
-        st.caption("⚠️ Não foi possível consultar a Selic no BCB; informe manualmente.")
+                               help="Padrão: CDI efetivo mais recente (série 12 do BCB). Use o DI futuro do vencimento, "
+                                    "se souber. É a régua de P(> CDI de hoje), o ajuste de regime, o drift do Monte "
+                                    "Carlo e a taxa do modo Teórico.")
+    if cdi_now is None:
+        st.caption("⚠️ Não foi possível consultar o CDI no BCB; informe manualmente.")
     q_pct = st.number_input("Dividend yield (% a.a.)", min_value=0.0, max_value=50.0, value=0.0, step=0.25)
     pricing_paths = st.select_slider("Caminhos do MC (barreiras)", [20_000, 50_000, 100_000, 200_000], value=50_000)
     pricing_seed = st.number_input("Seed do MC de precificação", value=42, step=1)
@@ -307,9 +335,14 @@ monitoring = sb.radio("Monitoramento", list(MONITORING_LABELS), format_func=MONI
 
 sb.header("6. Monte Carlo (backtest)")
 mc_method = sb.radio("Método", list(MC_METHOD_LABELS), format_func=MC_METHOD_LABELS.get)
-mc_drift = "historico"
-if mc_method == "gbm":
-    mc_drift = sb.selectbox("Drift do GBM", list(DRIFT_LABELS), format_func=DRIFT_LABELS.get)
+mc_drift = sb.selectbox("Retorno esperado da ação", list(DRIFT_LABELS), format_func=DRIFT_LABELS.get,
+                        help="Padrão: CDI (visão neutra). A média histórica é estatisticamente pouco confiável "
+                             "(erro padrão ≈ σ/√anos).")
+mc_premium = sb.number_input("Prêmio sobre o CDI (p.p. a.a.)", value=5.0, step=1.0) / 100 if mc_drift == "cdi_premio" else 0.05
+mc_custom = sb.number_input("Retorno esperado (% a.a.)", value=15.0, step=1.0) / 100 if mc_drift == "personalizado" else None
+regime_adjust = sb.checkbox("Ajustar histórico ao CDI de hoje", value=True,
+                            help="Re-ancora cada janela histórica no CDI de hoje, preservando o excesso de retorno "
+                                 "da ação sobre o CDI da época (\"e se eu contratasse agora?\").")
 mc_block = sb.slider("Tamanho do bloco (dias)", 1, 120, 20) if mc_method == "bootstrap" else 20
 mc_paths = sb.select_slider("Nº de caminhos", [1_000, 5_000, 10_000, 20_000, 50_000], value=10_000)
 mc_seed = sb.number_input("Seed", value=42, step=1)
@@ -505,7 +538,7 @@ with tab_struct:
                            file_name=f"{structure.name.lower().replace(' ', '_')}.json", mime="application/json")
 
 # ----------------------------- Backtests -----------------------------------
-hist_res = mc_res = hexit_res = mcexit_res = None
+hist_res = mc_res = hexit_res = mcexit_res = scen_res = None
 cdi_factor = None
 run_err = None
 if ready:
@@ -514,18 +547,23 @@ if ready:
             cdi = cached_cdi(prices.index[0].date(), prices.index[-1].date())
             cdi_factor = data.cdi_factor_on_index(prices.index, cdi, rate_annual)
             if n_days < len(prices):
-                hist_res = cached_historical(struct_json, prices, n_days, cost, monitoring, extra_cost, cdi_factor)
+                hist_res = cached_historical(struct_json, prices, n_days, cost, monitoring, extra_cost, cdi_factor,
+                                             rate_annual, regime_adjust and cdi is not None)
             mc_res = cached_mc(struct_json, prices, n_days, cost, mc_method, int(mc_paths), int(mc_block), mc_drift,
-                               rate_annual, int(mc_seed), monitoring, extra_cost)
+                               rate_annual, int(mc_seed), monitoring, extra_cost, mc_premium, mc_custom)
+            scen_res = cached_scen(struct_json, prices, n_days, cost, mc_method, int(mc_block), rate_annual,
+                                   int(mc_seed), monitoring, extra_cost, mc_premium)
         if exit_cfg is not None:
             with st.spinner("Marcando a estrutura dia a dia (saída antecipada)…"):
                 if hist_res is not None:
                     hexit_res = cached_hexit(struct_json, prices, n_days, cost, exit_cfg, cdi_factor,
-                                             hist_res.df["retorno"].to_numpy(), monitoring, extra_cost)
+                                             hist_res.df["retorno"].to_numpy(), monitoring, extra_cost, rate_annual,
+                                             bool(hist_res.meta.get("regime_adjust")))
                 if mc_res is not None:
                     mcexit_res = cached_mcexit(struct_json, mc_res.meta["paths_exit"], n_days, cost, exit_cfg,
                                                mc_res.df["retorno"].to_numpy(), mc_res.meta["sigma"], rate_annual,
-                                               monitoring, extra_cost)
+                                               monitoring, extra_cost, mc_res.meta["paths_exit_high"],
+                                               mc_res.meta["paths_exit_low"])
     except Exception as exc:  # noqa: BLE001
         run_err = str(exc)
 
@@ -543,13 +581,32 @@ def _not_ready(container) -> bool:
     return False
 
 
-def _kpis(container, s: dict) -> None:
-    k = container.columns(5)
-    k[0].metric("P(lucro > 0)", fmt_pct(s["p_lucro"], 1))
-    k[1].metric("P(retorno > CDI)", fmt_pct(s["p_cdi"], 1))
-    k[2].metric("P(perda)", fmt_pct(s["p_perda"], 1))
-    k[3].metric("Retorno mediano", fmt_pct(s["mediana"]), help=f"Em R\\$: {md_brl(invested * s['mediana'])}")
-    k[4].metric("Retorno médio", fmt_pct(s["media"]), help=f"Em R\\$: {md_brl(invested * s['media'])}")
+def _band(s: dict, key: str, scen=None) -> str:
+    """Faixa de incerteza: IC 95% (histórico) ou mínimo–máximo entre os cenários (Monte Carlo)."""
+    ci = s.get("ci", {}).get(key)
+    if ci:
+        return f"IC 95%: {fmt_num(100 * ci[0], 0)}–{fmt_num(100 * ci[1], 0)}%"
+    if scen is not None and key in scen and scen[key].notna().any():
+        return f"cenários: {fmt_num(100 * scen[key].min(), 0)}–{fmt_num(100 * scen[key].max(), 0)}%"
+    return ""
+
+
+def _kpis(container, s: dict, scen=None) -> None:
+    """Indicadores na ordem da revisão: P(lucro) → P(> CDI de hoje) → P(barreira), com faixas."""
+    k = container.columns(6)
+    k[0].metric("P(lucro > 0)", fmt_pct(s["p_lucro"], 1), help=_band(s, "p_lucro", scen) or None)
+    k[1].metric("P(retorno > CDI de hoje)", fmt_pct(s["p_cdi"], 1), help=_band(s, "p_cdi", scen) or None)
+    k[2].metric("P(barreira acionada)", fmt_pct(s["p_barreira"], 1) if np.isfinite(s["p_barreira"]) else "—",
+                help=_band(s, "p_barreira", scen) or None)
+    k[3].metric("P(perda)", fmt_pct(s["p_perda"], 1), help=_band(s, "p_perda", scen) or None)
+    k[4].metric("Retorno mediano", fmt_pct(s["mediana"]), help=f"Em R\\$: {md_brl(invested * s['mediana'])}")
+    k[5].metric("CVaR 5%", fmt_pct(s["cvar5"]), help="Média dos 5% piores resultados")
+    bands = [f"{lbl} {_band(s, key, scen).split(': ', 1)[1]}" for key, lbl in
+             (("p_lucro", "P(lucro)"), ("p_cdi", "P(> CDI de hoje)"), ("p_barreira", "P(barreira)"))
+             if _band(s, key, scen)]
+    if bands:
+        container.caption(("IC 95% (block bootstrap; janelas sobrepostas): " if s.get("ci") else
+                           "Faixa entre os 9 cenários de premissa: ") + " · ".join(bands))
 
 
 def _side_by_side() -> pd.DataFrame:
@@ -622,6 +679,12 @@ with tab_hist:
                         f"(não sobrepostas): **{fmt_num(hs['n_effective'], 0)}** · monitoramento: "
                         f"{MONITORING_LABELS[monitoring].lower()}")
             _kpis(st, hs)
+            st.caption(("Caminhos re-ancorados no **CDI de hoje** "
+                        f"({fmt_pct(rate_annual)} a.a.), preservando o excesso de retorno da ação sobre o CDI de cada época. "
+                        if hist_res.meta.get("regime_adjust") else "Ajuste ao CDI de hoje desligado: CDI da época. ")
+                       + f"Amostra efetiva ≈ {hs['n_effective']} janelas independentes. Em testes fora da amostra, a "
+                         "probabilidade de direção não foi mais precisa que a frequência histórica: use para comparar "
+                         "estruturas e dimensionar o risco de barreira.")
             if hs["barreiras"]:
                 st.caption("Barreira acionada em: " + " · ".join(
                     f"{lbl}: **{fmt_pct(v, 1)}** das janelas" for lbl, v in hs["barreiras"].items()))
@@ -660,7 +723,20 @@ with tab_mc:
                      f"{DRIFT_LABELS[mc_drift].lower()}")
         st.markdown(f"**{fmt_num(ms['n'], 0)} caminhos** de {n_days} pregões · {desc} · seed {mc_seed}"
                     + (" · barreira com correção BGK (intradiário)" if monitoring == "intraday" else ""))
-        _kpis(st, ms)
+        _kpis(st, ms, scen_res)
+        if scen_res is not None:
+            st.markdown("#### Sensibilidade às premissas (retorno esperado × vol)")
+            lbl = {"zero": "Zero", "cdi": f"CDI ({fmt_pct(rate_annual, 1)})", "cdi_premio": f"CDI + {fmt_num(100 * mc_premium, 0)} p.p."}
+            cols3 = st.columns(3)
+            for col, (key, title) in zip(cols3, (("p_lucro", "P(lucro > 0)"), ("p_cdi", "P(> CDI de hoje)"),
+                                                 ("p_barreira", "P(barreira acionada)"))):
+                tab = scen_res.pivot(index="drift", columns="sigma", values=key).reindex(list(SCENARIO_DRIFTS))
+                tab.index = [lbl[d] for d in tab.index]
+                tab.columns = [f"vol {fmt_pct(c, 0)}" for c in tab.columns]
+                col.markdown(f"**{title}**")
+                col.dataframe(tab.map(lambda v: fmt_pct(v, 1) if np.isfinite(v) else "—"), key=f"scen_{key}")
+            st.caption("Cenário central: retorno esperado = CDI e vol de base (histórica do período). 5.000 caminhos "
+                       "por cenário, com os mesmos números aleatórios.")
         if ms["barreiras"]:
             st.caption("Barreira acionada em: " + " · ".join(
                 f"{lbl}: **{fmt_pct(v, 1)}** dos caminhos" for lbl, v in ms["barreiras"].items()))

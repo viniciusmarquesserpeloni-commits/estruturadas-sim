@@ -52,7 +52,10 @@ def clean_prices(df: pd.DataFrame) -> pd.DataFrame:
     for col in ("High", "Low"):
         if col not in df.columns:
             df[col] = df["Close"]
-        df[col] = df[col].fillna(df["Close"])
+        # vazio ou não positivo (o Yahoo devolve máxima/mínima = 0 no pregão em andamento) vira o fechamento
+        df[col] = df[col].where(df[col] > 0).fillna(df["Close"])
+    df["High"] = np.maximum(df["High"], df["Close"])
+    df["Low"] = np.minimum(df["Low"], df["Close"])
     if "Open" not in df.columns:
         df["Open"] = df["Close"]
     return df[["Open", "High", "Low", "Close"]].astype(float)
@@ -146,22 +149,29 @@ def fetch_selic_meta() -> float | None:
         return None
 
 
-def fetch_cdi_daily(start: date | str, end: date | str) -> pd.Series | None:
+def fetch_cdi_daily(start: date | str, end: date | str, tries: int = 3) -> pd.Series | None:
     """Taxa CDI diária (fração ao dia) indexada por data; consulta em blocos de 5 anos
-    (a API limita séries diárias a 10 anos por consulta). None se falhar."""
+    (a API limita séries diárias a 10 anos por consulta), com até ``tries`` tentativas por bloco
+    (a API do BCB tem falhas momentâneas). None se algum bloco falhar em todas as tentativas."""
+    import time
+
     start, end = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
     frames = []
-    try:
-        cur = start
-        while cur <= end:
-            stop = min(cur + pd.DateOffset(years=5) - pd.Timedelta(days=1), end)
-            data = _sgs_get(SGS_CDI_DAILY, {"dataInicial": cur.strftime("%d/%m/%Y"),
-                                            "dataFinal": stop.strftime("%d/%m/%Y")})
-            if data:
-                frames.append(pd.DataFrame(data))
-            cur = stop + pd.Timedelta(days=1)
-    except Exception:
-        return None
+    cur = start
+    while cur <= end:
+        stop = min(cur + pd.DateOffset(years=5) - pd.Timedelta(days=1), end)
+        params = {"dataInicial": cur.strftime("%d/%m/%Y"), "dataFinal": stop.strftime("%d/%m/%Y")}
+        for attempt in range(tries):
+            try:
+                data = _sgs_get(SGS_CDI_DAILY, dict(params))
+                break
+            except Exception:
+                if attempt == tries - 1:
+                    return None
+                time.sleep(1.5 * (attempt + 1))
+        if data:
+            frames.append(pd.DataFrame(data))
+        cur = stop + pd.Timedelta(days=1)
     if not frames:
         return None
     df = pd.concat(frames)

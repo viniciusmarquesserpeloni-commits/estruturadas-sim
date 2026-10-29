@@ -6,10 +6,11 @@ const E = self.Estr;
 const TASKS = {
   price: (a) => E.priceStructure(a.s, a.sigma, a.r, a.q, a.n, a.paths, a.seed, a.monitoring),
   solve: (a) => E.solveZeroCost(a.s, a.legs, a.param, a.sigma, a.r, a.q, a.n, a.paths, a.seed, a.monitoring, a.bounds, a.target),
-  hist: (a) => E.runHistorical(a.s, a.P, a.n, a.cost, a.monitoring, a.extra, a.cdiF),
+  hist: (a) => E.runHistorical(a.s, a.P, a.n, a.cost, a.monitoring, a.extra, a.cdiF, a.cdiRef, a.regimeAdjust),
   mc: (a) => E.runMonteCarlo(a.s, a.P, a.n, a.cost, a.o),
-  hexit: (a) => E.runHistoricalExit(a.s, a.P, a.n, a.cost, a.cfg, a.cdiF, a.retHold, a.monitoring, a.extra),
-  mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra),
+  hexit: (a) => E.runHistoricalExit(a.s, a.P, a.n, a.cost, a.cfg, a.cdiF, a.retHold, a.monitoring, a.extra, a.cdiRef, a.regimeAdjust),
+  mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra, a.high, a.low),
+  scen: (a) => E.runScenarios(a.s, a.P, a.n, a.cost, a.o),
 };
 
 self.onmessage = (ev) => {

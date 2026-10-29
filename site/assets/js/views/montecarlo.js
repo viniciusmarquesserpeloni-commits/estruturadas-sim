@@ -17,13 +17,15 @@
     if (ctx.mcError) { CH().disposeIn(root); root.innerHTML = head + `<div class="card empty"><h3>Não foi possível rodar o Monte Carlo</h3><p>${esc(ctx.mcError)}</p></div>`; return; }
     if (!ctx.mc) { CH().disposeIn(root); root.innerHTML = head + `<div class="card"><div class="loading">Simulando ${F.int(st.adv.mcPaths)} caminhos…</div></div>`; return; }
     const res = ctx.mc, sm = E.summarize(res);
-    const desc = res.method === "bootstrap" ? `bootstrap em blocos de ${res.block} dias dos log-retornos diários`
-      : `GBM com σ histórica de ${F.pct(res.sigma, 1, false)} a.a. e drift ${E.DRIFT_LABELS[res.drift].toLowerCase()}`;
+    const desc = (res.method === "bootstrap" ? `bootstrap em blocos de ${res.block} dias (fechamento, máxima e mínima juntos)` : `GBM com σ de ${F.pct(res.sigma, 1, false)} a.a.`)
+      + ` · retorno esperado da ação: ${E.DRIFT_LABELS[res.drift].toLowerCase()}${res.mu != null ? ` (${F.pct(res.mu, 2, false)} a.a.)` : ""}`;
     const cdi = Math.pow(1 + ctx.rateAnnual, res.N / 252) - 1;
     CH().disposeIn(root);
     root.innerHTML = head + `
       <p class="small muted" style="margin:-8px 0 12px"><b>${F.int(sm.n)} caminhos</b> de ${F.int(res.N)} pregões · ${desc} · seed ${res.seed}${res.monitoring === "intraday" ? " · barreira com correção de Broadie-Glasserman-Kou (intradiário)" : ""}</p>
-      <div class="card kpi-strip">${UI.kpis(sm, st.invested, "caminhos")}</div>
+      <div class="card"><div class="kpi-strip">${UI.kpis(sm, st.invested, "caminhos", ctx.scen)}</div>
+        <div class="card-note">O erro de sorteio é desprezível; a incerteza que importa é de premissa. As faixas mostram o mínimo e o máximo entre 9 cenários de retorno esperado × volatilidade (tabela abaixo).</div></div>
+      ${UI.scenarioCard(ctx, res)}
       <div class="grid g-2" style="margin-top:16px">
         <div class="card"><div class="card-h"><h3>Distribuição dos retornos</h3><span class="sub">Monte Carlo</span></div>
           <div class="card-b"><div class="chart" id="m-hist"></div></div>

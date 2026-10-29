@@ -44,23 +44,34 @@
   const DEFAULT_ADV = {
     start: "2010-01-01", adjusted: true, monitoring: "close", extra: 0,
     vol: null, rate: null, q: 0, pricingPaths: 50000, pricingSeed: 42,
-    mcMethod: "bootstrap", mcDrift: "historico", mcPaths: 10000, mcBlock: 20, mcSeed: 42,
+    mcMethod: "bootstrap", mcDrift: "cdi", mcPremium: 0.05, mcCustom: null, mcPaths: 10000, mcBlock: 20, mcSeed: 42,
+    regimeAdjust: true,
     exitOn: true, exitTrigger: 1.5, exitSpread: 0.01, exitDelay: 1, exitMinDays: 0,
     exitVolMode: "rolling", exitVolAdd: 0.03, exitCalibrate: true,
   };
+  const STATE_VERSION = 2; // 2 = revisão metodológica (drift CDI, ajuste de regime, CDI efetivo, padrão de 3 meses)
   function defaults() {
-    const s = E.PRESETS.protecao_total.build();
+    // padrão: estrutura típica de 3 meses (63 pregões); a lâmina Proteção Total BBDC4 segue como preset
+    const s = E.PRESETS.collar_ki.build(1.0, 1.06, 1.12);
+    const pt = E.PRESETS.protecao_total.build();
     return {
-      ticker: "BBDC4", presetKey: "protecao_total", structure: s,
-      term: { mode: "datas", months: 12, du: 252, trade: s.trade_date, expiry: s.expiry_date },
+      version: STATE_VERSION, ticker: "BBDC4", presetKey: "collar_ki", structure: s,
+      term: { mode: "meses", months: 3, du: 63, trade: pt.trade_date, expiry: pt.expiry_date },
       invested: 30000, costMode: "informado", costInformed: 0,
-      expost: { trade: s.trade_date, expiry: s.expiry_date },
+      expost: { trade: pt.trade_date, expiry: pt.expiry_date },
       variations: null, adv: Object.assign({}, DEFAULT_ADV), advOpen: false,
     };
   }
   function loadState() {
     const d = defaults(), saved = store.get("state", null);
-    if (!saved) return d;
+    if (!saved || saved.version !== STATE_VERSION) {
+      // estado de versão anterior: adota os novos padrões (estrutura de 3 meses, drift CDI, ajuste de regime),
+      // mantendo só a ação e o valor investido
+      if (!saved) return d;
+      d.ticker = saved.ticker || d.ticker;
+      d.invested = saved.invested ?? d.invested;
+      return d;
+    }
     try {
       const st = Object.assign(d, saved);
       st.adv = Object.assign({}, DEFAULT_ADV, saved.adv || {});
@@ -158,10 +169,11 @@
   const LOCAL = {
     price: (a) => E.priceStructure(a.s, a.sigma, a.r, a.q, a.n, a.paths, a.seed, a.monitoring),
     solve: (a) => E.solveZeroCost(a.s, a.legs, a.param, a.sigma, a.r, a.q, a.n, a.paths, a.seed, a.monitoring, a.bounds, a.target),
-    hist: (a) => E.runHistorical(a.s, a.P, a.n, a.cost, a.monitoring, a.extra, a.cdiF),
+    hist: (a) => E.runHistorical(a.s, a.P, a.n, a.cost, a.monitoring, a.extra, a.cdiF, a.cdiRef, a.regimeAdjust),
     mc: (a) => E.runMonteCarlo(a.s, a.P, a.n, a.cost, a.o),
-    hexit: (a) => E.runHistoricalExit(a.s, a.P, a.n, a.cost, a.cfg, a.cdiF, a.retHold, a.monitoring, a.extra),
-    mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra),
+    hexit: (a) => E.runHistoricalExit(a.s, a.P, a.n, a.cost, a.cfg, a.cdiF, a.retHold, a.monitoring, a.extra, a.cdiRef, a.regimeAdjust),
+    mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra, a.high, a.low),
+    scen: (a) => E.runScenarios(a.s, a.P, a.n, a.cost, a.o),
   };
   try {
     const ver = ((document.querySelector('script[src*="core.js"]') || {}).src || "").split("?")[1] || "";
@@ -225,7 +237,8 @@
     ctx.histVol = ctx.P ? E.histVol(ctx.P.c) : NaN;
     ctx.sigma = st.adv.vol ?? (isFinite(ctx.histVol) ? ctx.histVol : 0.3);
     const selic = App.data.index ? App.data.index.selic_meta : null;
-    ctx.rateAnnual = st.adv.rate ?? (selic ?? 0.10);
+    ctx.cdiNow = App.cdiAtual();
+    ctx.rateAnnual = st.adv.rate ?? ctx.cdiNow ?? (selic != null ? selic - 0.001 : 0.10);
     ctx.r = E.annualToContinuous(ctx.rateAnnual);
     const s = st.structure, extra = st.adv.extra || 0;
     ctx.extra = extra;
@@ -249,20 +262,28 @@
     if (!ctx.ok || !ctx.P) { ctx.loading = false; push(); return; }
 
     // Backtests
-    const key = JSON.stringify([s.legs, ctx.cost, ctx.ticker, st.adv.adjusted, st.adv.start, ctx.n, st.adv.monitoring, extra, ctx.rateAnnual, App.csv ? App.csv.d.length : 0]);
+    const key = JSON.stringify([s.legs, ctx.cost, ctx.ticker, st.adv.adjusted, st.adv.start, ctx.n, st.adv.monitoring, extra, ctx.rateAnnual, st.adv.regimeAdjust, App.csv ? App.csv.d.length : 0]);
+    ctx.regimeAdjust = !!(st.adv.regimeAdjust && App.data.cdi && App.data.cdi.d.length);
     ctx.cdiF = E.cdiFactor(ctx.P.d, App.data.cdi && App.data.cdi.d.length ? App.data.cdi : null, ctx.rateAnnual);
     ctx.histPending = true; push();
     try {
       if (ctx.n >= ctx.P.c.length) throw new Error(`Histórico insuficiente (${ctx.P.c.length} pregões) para janelas de ${ctx.n} pregões.`);
-      ctx.hist = await memo("hist:" + key, () => App.call("hist", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, monitoring: st.adv.monitoring, extra, cdiF: ctx.cdiF }));
+      ctx.hist = await memo("hist:" + key, () => App.call("hist", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, monitoring: st.adv.monitoring, extra, cdiF: ctx.cdiF, cdiRef: ctx.rateAnnual, regimeAdjust: ctx.regimeAdjust }));
     } catch (e) { ctx.histError = e.message; }
     ctx.histPending = false;
     if (!live()) return;
     ctx.mcPending = true; push();
-    const o = { method: st.adv.mcMethod, nPaths: st.adv.mcPaths, block: st.adv.mcBlock, drift: st.adv.mcDrift, cdiAnnual: ctx.rateAnnual, seed: st.adv.mcSeed, monitoring: st.adv.monitoring, extra };
+    const o = { method: st.adv.mcMethod, nPaths: st.adv.mcPaths, block: st.adv.mcBlock, drift: st.adv.mcDrift, premium: st.adv.mcPremium, custom: st.adv.mcCustom, cdiAnnual: ctx.rateAnnual, seed: st.adv.mcSeed, monitoring: st.adv.monitoring, extra };
     try { ctx.mc = await memo("mc:" + key + JSON.stringify(o), () => App.call("mc", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, o })); }
     catch (e) { ctx.mcError = e.message; }
     ctx.mcPending = false;
+    if (!live()) return;
+    // Grade de cenários (drift × vol): incerteza de premissa do Monte Carlo
+    ctx.scenPending = true; push();
+    const so = { method: o.method, block: o.block, cdiAnnual: o.cdiAnnual, seed: o.seed, monitoring: o.monitoring, extra, premium: o.premium, nPaths: 5000 };
+    try { ctx.scen = await memo("scen:" + key + JSON.stringify(so), () => App.call("scen", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, o: so })); }
+    catch (e) { ctx.scenError = e.message; }
+    ctx.scenPending = false;
     if (!live()) return;
     // Saída antecipada (marcação diária e gatilho de % do CDI)
     ctx.exitCfg = App.exitCfg(st);
@@ -270,15 +291,23 @@
       ctx.exitPending = true; push();
       const ek = key + JSON.stringify(ctx.exitCfg);
       try {
-        if (ctx.hist) ctx.hexit = await memo("hexit:" + ek, () => App.call("hexit", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, cdiF: ctx.cdiF, retHold: ctx.hist.ret, monitoring: st.adv.monitoring, extra }));
+        if (ctx.hist) ctx.hexit = await memo("hexit:" + ek, () => App.call("hexit", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, cdiF: ctx.cdiF, retHold: ctx.hist.ret, monitoring: st.adv.monitoring, extra, cdiRef: ctx.rateAnnual, regimeAdjust: ctx.regimeAdjust }));
         if (!live()) return;
-        if (ctx.mc) ctx.mcexit = await memo("mcexit:" + ek + JSON.stringify(o), () => App.call("mcexit", { s, paths: ctx.mc.sample, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, retHold: ctx.mc.ret, sigma: ctx.mc.sigma, cdiAnnual: ctx.rateAnnual, monitoring: st.adv.monitoring, extra }));
+        if (ctx.mc) ctx.mcexit = await memo("mcexit:" + ek + JSON.stringify(o), () => App.call("mcexit", { s, paths: ctx.mc.sample, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, retHold: ctx.mc.ret, sigma: ctx.mc.sigma, cdiAnnual: ctx.rateAnnual, monitoring: st.adv.monitoring, extra, high: ctx.mc.sampleH, low: ctx.mc.sampleL }));
       } catch (e) { ctx.exitError = e.message; }
       ctx.exitPending = false;
     }
     ctx.loading = false;
     push();
   }
+
+  /* CDI efetivo mais recente (a.a., base 252): do index.json (gerado com o site) ou do último dia do cdi.json. */
+  App.cdiAtual = function () {
+    const idx = App.data.index, cdi = App.data.cdi;
+    if (idx && idx.cdi_atual != null) return idx.cdi_atual;
+    if (cdi && cdi.r && cdi.r.length) return Math.pow(1 + cdi.r[cdi.r.length - 1], 252) - 1;
+    return null;
+  };
 
   /* Parâmetros da saída antecipada no formato do motor. */
   App.exitCfg = (st) => ({ trigger: st.adv.exitTrigger, exitSpread: st.adv.exitSpread, delay: st.adv.exitDelay, minDays: st.adv.exitMinDays,

@@ -7,15 +7,24 @@
   /* ---------------- Utilitários compartilhados ---------------- */
   const UI = (App.ui = {});
   UI.kpi = (label, value, hint) => `<div class="kpi"><div class="label">${label}</div><div class="value">${value}</div>${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
-  UI.kpis = function (sm, invested, what) {
-    const bar = sm.barreiras.length ? sm.barreiras.map((b) => F.pct(b.p, 1, false)).join(" / ") : "—";
+  /* Faixa de incerteza de uma probabilidade: IC 95% (histórico) ou mín–máx entre cenários (Monte Carlo). */
+  UI.ciText = (sm, k) => (sm.ci && sm.ci[k] ? `IC 95%: ${F.num(sm.ci[k][0] * 100, 0)}–${F.num(sm.ci[k][1] * 100, 0)}%` : null);
+  UI.scenRange = (scen, k) => {
+    if (!scen) return null;
+    const v = scen.map((r) => r[k]).filter((x) => isFinite(x));
+    return v.length ? `cenários: ${F.num(Math.min(...v) * 100, 0)}–${F.num(Math.max(...v) * 100, 0)}%` : null;
+  };
+  /* Indicadores na ordem da revisão: P(lucro) → P(> CDI de hoje) → P(barreira), cada um com sua faixa. */
+  UI.kpis = function (sm, invested, what, scen) {
+    const band = (k, fallback) => UI.ciText(sm, k) || UI.scenRange(scen, k) || fallback;
+    const hasBar = isFinite(sm.p_barreira);
     return [
-      UI.kpi("P(lucro > 0)", F.pct(sm.p_lucro, 1, false), `${what}: ${F.int(sm.n)}`),
-      UI.kpi("P(retorno > CDI)", F.pct(sm.p_cdi, 1, false), `CDI médio ${F.pct(sm.cdi_medio, 2, false)}`),
-      UI.kpi("P(perda)", F.pct(sm.p_perda, 1, false), `pior: ${F.pct(sm.pior)}`),
-      UI.kpi("Retorno mediano", App.signed(sm.mediana), F.brl(invested * sm.mediana)),
-      UI.kpi("Retorno médio", App.signed(sm.media), `${F.pct(sm.media_anual, 2)} a.a. · ${F.brl(invested * sm.media)}`),
-      UI.kpi("Barreira acionada", bar, sm.barreiras.length ? sm.barreiras.map((b) => esc(b.label)).join(" / ") : "estrutura sem barreira"),
+      UI.kpi("P(lucro > 0)", F.pct(sm.p_lucro, 1, false), band("p_lucro", `${what}: ${F.int(sm.n)}`)),
+      UI.kpi("P(retorno > CDI de hoje)", F.pct(sm.p_cdi, 1, false), band("p_cdi", `CDI no prazo: ${F.pct(sm.cdi_hoje, 2, false)}`)),
+      UI.kpi("P(barreira acionada)", hasBar ? F.pct(sm.p_barreira, 1, false) : "—", hasBar ? band("p_barreira", "") : "estrutura sem barreira"),
+      UI.kpi("P(perda)", F.pct(sm.p_perda, 1, false), band("p_perda", `pior: ${F.pct(sm.pior)}`)),
+      UI.kpi("Retorno mediano", App.signed(sm.mediana), `média ${F.pct(sm.media)} · ${F.brl(invested * sm.mediana)}`),
+      UI.kpi("CVaR 5%", App.signed(sm.cvar5), `média dos 5% piores · P5 ${F.pct(sm.p5)}`),
     ].join("");
   };
   /* Tabela de métricas lado a lado (histórico × Monte Carlo). */
@@ -27,9 +36,25 @@
     E.METRIC_ROWS.forEach(([k, label, kind]) => {
       if (k === "@barreiras") { labels.forEach((lbl) => rows.push(`<tr><td style="white-space:normal">Barreira acionada (${esc(lbl)})</td>${sums.map((s) => { const b = s.barreiras.find((x) => x.label === lbl); return `<td>${b ? F.pct(b.p, 2, false) : "—"}</td>`; }).join("")}</tr>`)); return; }
       const signedRow = kind === "pct" && !k.startsWith("p_") && !k.startsWith("acao_p") && !k.startsWith("cdi");
-      rows.push(`<tr><td style="white-space:normal">${label}</td>${sums.map((s) => `<td>${signedRow && isFinite(s[k]) ? App.signed(s[k]) : cell(s[k], kind)}</td>`).join("")}</tr>`);
+      const ci = (s) => (s.ci && s.ci[k] && isFinite(s[k]) ? ` <span class="muted small">(${F.num(s.ci[k][0] * 100, 0)}–${F.num(s.ci[k][1] * 100, 0)}%)</span>` : "");
+      rows.push(`<tr><td style="white-space:normal">${label}</td>${sums.map((s) => `<td>${signedRow && isFinite(s[k]) ? App.signed(s[k]) : cell(s[k], kind)}${ci(s)}</td>`).join("")}</tr>`);
     });
     return `<div style="overflow-x:auto"><table class="compact"><thead><tr><th>Métrica</th>${names.map((n) => `<th>${esc(n)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  };
+  /* Grade de cenários do Monte Carlo: retorno esperado (linhas) × volatilidade (colunas). */
+  UI.scenarioCard = function (ctx, res) {
+    const head = `<div class="card" style="margin-top:16px"><div class="card-h"><h3>Sensibilidade às premissas</h3><span class="sub">retorno esperado da ação × volatilidade · 5.000 caminhos por cenário</span></div>`;
+    if (ctx.scenError) return head + `<div class="card-b"><div class="err-note">${esc(ctx.scenError)}</div></div></div>`;
+    if (!ctx.scen) return head + `<div class="card-b"><div class="loading">Rodando 9 cenários…</div></div></div>`;
+    const rows = ctx.scen, vols = E.SCENARIO_VOLS, prem = rows.find((r) => r.drift === "cdi_premio");
+    const lbl = { zero: "Zero", cdi: `CDI (${F.pct(ctx.rateAnnual, 1, false)})`, cdi_premio: `CDI + ${F.num((prem.mu - ctx.rateAnnual) * 100, 0)} p.p.` };
+    const sig = (v) => rows.find((r) => r.volScale === v).sigma;
+    const table = (k, title) => `<div><div class="small" style="font-weight:600;margin-bottom:6px">${title}</div><table class="compact"><thead><tr><th>Retorno ↓ · vol →</th>${vols.map((v) => `<th>${F.pct(sig(v), 0, false)}</th>`).join("")}</tr></thead><tbody>
+      ${E.SCENARIO_DRIFTS.map((d) => `<tr><td>${lbl[d]}</td>${vols.map((v) => { const r = rows.find((x) => x.drift === d && x.volScale === v); const c = d === "cdi" && v === 1; return `<td${c ? ' style="font-weight:700"' : ""}>${isFinite(r[k]) ? F.pct(r[k], 1, false) : "—"}</td>`; }).join("")}</tr>`).join("")}
+      </tbody></table></div>`;
+    const v63 = ctx.P ? E.histVol(ctx.P.c, 63) : NaN, base = rows.find((r) => r.volScale === 1).sigma / 1;
+    return head + `<div class="card-b"><div class="grid g-3">${table("p_lucro", "P(lucro > 0)")}${table("p_cdi", "P(retorno > CDI de hoje)")}${table("p_barreira", "P(barreira acionada)")}</div></div>
+      <div class="card-note">Em negrito, o cenário central (retorno esperado = CDI, vol de base). Vol de base = vol histórica do período carregado (${F.pct(base, 1, false)} a.a.); a vol realizada dos últimos 63 pregões é ${F.pct(v63, 1, false)} a.a.${isFinite(v63) ? ` (${F.num(v63 / base, 2)}× a base)` : ""}. Mesmos números aleatórios em todos os cenários.</div></div>`;
   };
   UI.csv = function (res, invested) {
     const head = ["data_inicio", "data_fim", "acao_final", "retorno", "retorno_acao", "retorno_cdi", "barreira_acionada", "resultado_rs"];
@@ -72,7 +97,7 @@
       ${E.EXIT_ROWS.map(([k, label, kind2]) => `<tr><td style="white-space:normal">${label}</td>${sums.map((s) => `<td>${!isFinite(s[k]) ? "—" : kind2 === "int" ? F.int(s[k]) : F.pct(s[k], 2, false)}</td>`).join("")}</tr>`).join("")}
       </tbody></table></div>`;
     let regimes = "";
-    if (kind === "hist") {
+    if (kind === "hist" && !res.cfg.regimeAdjust && !(ctx.hist && ctx.hist.regimeAdjust)) {
       const rows = E.exitByCdiRegime(res), cur = ctx.rateAnnual;
       regimes = `<div class="card" style="margin-top:16px"><div class="card-h"><h3>Saída antecipada por nível de juros no início da janela</h3><span class="sub">CDI atual: ${F.pct(cur, 2, false)} a.a.</span></div>
         <div class="card-b"><div style="overflow-x:auto"><table class="compact"><thead><tr><th>Juros no início</th><th>Janelas</th><th>P(saída antecipada)</th><th>Dia mediano da saída</th><th>P(&gt; CDI) com saída</th><th>Retorno médio com saída</th><th>Retorno médio no vencimento</th></tr></thead><tbody>
@@ -83,7 +108,7 @@
     }
     return title + `
       <div class="card kpi-strip">
-        ${UI.kpi("P(saída antecipada)", F.pct(sm.p_saida, 1, false), `gatilho atingido em ${F.pct(sm.p_gatilho, 1, false)}`)}
+        ${UI.kpi("P(saída antecipada)", F.pct(sm.p_saida, 1, false), UI.ciText(sm, "p_saida") || `gatilho atingido em ${F.pct(sm.p_gatilho, 1, false)}`)}
         ${UI.kpi("Dia mediano da saída", days, isFinite(sm.dias_p25) ? `metade entre ${F.int(sm.dias_p25)} e ${F.int(sm.dias_p75)}` : "nenhuma saída")}
         ${UI.kpi("Retorno médio com saída", App.signed(sm.media), `no vencimento: ${F.pct(sm.media_venc)}`)}
         ${UI.kpi("P(&gt; CDI) com saída", F.pct(sm.p_cdi, 1, false), `no vencimento: ${F.pct(base.p_cdi, 1, false)}`)}
@@ -126,7 +151,10 @@
     CH().disposeIn(root);
     root.innerHTML = head + `
       <p class="small muted" style="margin:-8px 0 12px"><b>${esc(ctx.ticker)}</b> · ${F.int(sm.n)} janelas de ${F.int(res.N)} pregões entre ${F.date(ctx.P.d[0])} e ${F.date(ctx.P.d[ctx.P.d.length - 1])} · amostra efetiva (não sobrepostas): <b>${F.int(sm.nEff)}</b> · monitoramento: ${E.MONITORING_LABELS[res.monitoring].toLowerCase()} · custo ${F.pct(ctx.cost, 2, false)}</p>
-      <div class="card kpi-strip">${UI.kpis(sm, st.invested, "janelas")}</div>
+      <div class="card"><div class="kpi-strip">${UI.kpis(sm, st.invested, "janelas")}</div>
+        <div class="card-note">${res.regimeAdjust ? `Caminhos re-ancorados no <b>CDI de hoje (${F.pct(ctx.rateAnnual, 2, false)} a.a.)</b>, preservando o excesso de retorno da ação sobre o CDI de cada época — “e se eu contratasse agora?”.` : `Ajuste ao CDI de hoje desligado: cada janela usa os juros da sua época.`}
+        Janelas vizinhas se sobrepõem: a amostra efetiva é de ≈ ${F.int(sm.nEff)} janelas independentes, daí as faixas (IC 95% por block bootstrap).
+        Em testes fora da amostra, a probabilidade de direção não foi mais precisa que a frequência histórica: use para comparar estruturas e dimensionar o risco de barreira.</div></div>
       <div class="card" style="margin-top:16px"><div class="card-h"><h3>Retorno de cada janela pela data de início</h3><span class="sub">cor = lucro / sem lucro · triângulo = barreira acionada</span></div>
         <div class="card-b"><div class="chart tall" id="b-ts"></div></div>
         <div class="card-note">Janelas vizinhas compartilham quase todo o caminho de preços: os pontos não são observações independentes.</div></div>

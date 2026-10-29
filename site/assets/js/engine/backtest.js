@@ -248,7 +248,7 @@
   E.runScenarios = function (s, P, N, cost, o = {}) {
     const rows = [];
     for (const drift of E.SCENARIO_DRIFTS) for (const vs of E.SCENARIO_VOLS) {
-      const r = E.runMonteCarlo(s, P, N, cost, Object.assign({}, o, { drift, volScale: vs, nPaths: o.nPaths || 2000, keep: 0 }));
+      const r = E.runMonteCarlo(s, P, N, cost, Object.assign({}, o, { drift, volScale: vs, nPaths: o.nPaths || 5000, keep: 0 }));
       let luc = 0, cdi = 0, bar = 0, sum = 0;
       for (let i = 0; i < r.n; i++) { const v = r.ret[i]; if (v > TOL) luc++; if (v > r.cdiHoje + TOL) cdi++; if (r.anyHit[i]) bar++; sum += v; }
       rows.push({ drift, mu: r.mu, volScale: vs, sigma: r.sigma, p_lucro: luc / r.n, p_cdi: cdi / r.n,

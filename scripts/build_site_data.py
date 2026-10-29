@@ -149,10 +149,11 @@ def main(argv: list[str]) -> int:
         "dados_ate": last_global.strftime("%Y-%m-%d"),
         "inicio": START,
         "selic_meta": selic,
+        "cdi_atual": sdata.latest_cdi_annual(cdi),  # CDI efetivo mais recente (a.a.): régua padrão do site
         "acoes": index,
     }
     (OUT / "index.json").write_text(json.dumps(meta, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"OK: {len(index)} ações, dados até {meta['dados_ate']}, Selic meta {selic}")
+    print(f"OK: {len(index)} ações, dados até {meta['dados_ate']}, Selic meta {selic}, CDI atual {meta['cdi_atual']}")
     return 0
 
 
