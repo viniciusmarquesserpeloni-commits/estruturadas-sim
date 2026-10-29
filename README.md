@@ -28,7 +28,8 @@ inicial, tipo de barreira *Knock Up/Down and In/Out* e proporção), e os result
      4.5 Validações · 4.6 Prazo e calendário · 4.7 Preços e ajustes · 4.8 CDI e Selic ·
      4.9 Backtest por janelas históricas · 4.10 Monte Carlo · 4.11 Monitoramento intradiário ·
      4.12 Ex-post · 4.13 Métricas · 4.14 Quadro de rentabilidade · 4.15 Precificação teórica ·
-     4.16 Solver de custo zero · 4.17 Textos em linguagem simples · 4.18 Saída antecipada
+     4.16 Solver de custo zero · 4.17 Textos em linguagem simples · 4.18 Saída antecipada ·
+     4.19 Incerteza: intervalos de confiança e cenários
 5. [Presets e fórmulas do payoff](#5-presets-e-fórmulas-do-payoff)
 6. [Módulos: Python, JavaScript e demais linguagens](#6-módulos-python-javascript-e-demais-linguagens)
 7. [Bibliotecas e serviços externos](#7-bibliotecas-e-serviços-externos)
@@ -45,6 +46,13 @@ continuidade ao projeto em outra conversa ou com outra pessoa).
 ---
 
 ## 1. O que o simulador faz
+
+**A pergunta que ele responde:** *"qual a chance de esta estrutura dar certo se eu contratar agora?"*. Por isso
+as probabilidades são condicionadas ao momento atual — régua no **CDI de hoje**, histórico re-ancorado nos juros
+de hoje, Monte Carlo com retorno esperado neutro (CDI) — e sempre aparecem com uma **faixa de incerteza**. Os
+indicadores principais vêm nesta ordem: **P(lucro) → P(retorno > CDI de hoje) → P(barreira acionada)**. Essa
+orientação vem da revisão metodológica em [docs/REVISAO_METODOLOGICA.md](docs/REVISAO_METODOLOGICA.md)
+(Fase 1 implementada; Fase 2, com volatilidade condicional GARCH e painel de calibração, em andamento).
 
 | Recurso | Descrição |
 |---|---|
@@ -214,9 +222,14 @@ Exemplo: Proteção Total BBDC4, contratação 19/11/2025, vencimento 25/11/2026
 
 ### 4.8 CDI e Selic
 
-- **Selic meta** (API SGS do BCB, série 432): taxa padrão do modo Teórico e "CDI" do Monte Carlo.
+- **CDI de referência (CDI de hoje):** o CDI efetivo do último dia disponível, `(1 + CDI diário)^252 − 1`
+  (13,65% a.a. em out/2026), editável — use o DI futuro do vencimento, se souber. É a régua de P(> CDI de hoje),
+  a âncora do ajuste de regime, o drift "CDI" do Monte Carlo e a taxa do modo Teórico. Sem a série do BCB, cai
+  para a Selic meta − 0,10 p.p.
+- **Selic meta** (API SGS do BCB, série 432): referência secundária.
 - **CDI diário** (série 12, % ao dia): usado no backtest histórico. A API limita consultas diárias a 10 anos,
-  então o download é feito em blocos de 5 anos.
+  então o download é feito em blocos de 5 anos, com até 3 tentativas por bloco (a API tem falhas momentâneas;
+  no Streamlit, uma falha não fica em cache).
 - **Fator acumulado do CDI** em cada pregão da série: `fator_t = Π (1 + cdi_d)`, com o CDI de cada pregão
   sendo o último publicado até aquela data; sem dado, usa a taxa anual informada convertida para diária,
   `(1 + taxa)^(1/252) − 1`. O CDI de uma janela é `fator[t+N] / fator[t] − 1`.
@@ -240,21 +253,59 @@ as janelas com **os mesmos parâmetros em %**.
 *Racional:* responde "se eu tivesse contratado esta estrutura num dia qualquer do passado, quantas vezes
 teria ganhado?", usando o comportamento real da ação (caudas, tendências, crises). Janelas vizinhas
 compartilham quase todo o caminho, então os resultados são fortemente correlacionados: por isso a amostra
-efetiva é exibida ao lado do número de janelas.
+efetiva é exibida ao lado do número de janelas, e cada probabilidade tem um intervalo de confiança (4.19).
+
+**Ajuste ao CDI de hoje (padrão ligado).** Para responder "e se eu contratasse agora?", cada caminho
+(fechamento, máxima e mínima) é multiplicado por
+
+```
+f[t, k] = (1 + CDI_hoje)^(k/252) / (CDI acumulado da época de t a t+k)        k = 1..N
+```
+
+Isso preserva o **excesso de retorno da ação sobre o CDI** de cada época e o re-ancora nos juros de hoje.
+*Por quê:* sem o ajuste, estruturas com piso ou cupom fixo ficam infladas quando testadas em épocas de CDI
+baixo. Ex. (janelas desde 2010): Proteção Total 12m — P(> CDI) de 35% com o CDI da época contra **23%** com o
+CDI de hoje em BBDC4; 21% → **11%** em PETR4. Estruturas atreladas à ação quase não mudam (Collar KI 3m em
+BBDC4: 48% → 48%), porque o drift da ação sobe junto com o CDI. Observação: o ajuste mantém o prêmio de risco
+do período (a ação de 2010–2026 rendeu acima do CDI), o que eleva um pouco P(lucro) (55,8% → 57,8% no Collar
+KI 3m); a visão neutra é o Monte Carlo com retorno esperado = CDI. "P(> CDI da época)" (sem ajuste) segue na
+tabela detalhada como métrica secundária.
 
 ### 4.10 Monte Carlo (complemento)
 
-Volatilidade usada: desvio-padrão dos log-retornos de todo o histórico carregado × √252.
+Volatilidade de base: desvio-padrão dos log-retornos de todo o histórico carregado × √252 (na Fase 2 da
+revisão, passa a ser a vol condicional de um GARCH).
 
 - **Bootstrap em blocos circular (padrão):** sorteia, para cada bloco de `L` dias (padrão 20), uma posição
-  inicial aleatória na série de log-retornos e copia `L` retornos consecutivos (dando a volta no fim da série);
-  encadeia blocos até N dias e acumula: `S_j = exp(Σ r)`. *Racional:* reamostrar blocos, e não dias
-  isolados, preserva parte da autocorrelação e da aglomeração de volatilidade, além das caudas gordas reais.
-- **GBM (log-normal):** `ln S_{j+1} − ln S_j = μ_d + σ·√(1/252)·Z`, com `Z ~ N(0,1)` e variáveis antitéticas.
-  O drift diário `μ_d` pode ser:
-  - **histórico:** média dos log-retornos diários;
-  - **zero:** retorno esperado aritmético nulo, `μ_d = −σ²/2 · (1/252)`;
-  - **CDI:** retorno esperado igual ao CDI, `μ_d = (ln(1 + CDI) − σ²/2) · (1/252)`.
+  inicial aleatória na série e copia `L` dias consecutivos (dando a volta no fim da série) — **o fechamento, a
+  máxima e a mínima de cada dia juntos** (`lr_t = ln(C_t/C_{t−1})`, `up_t = ln(H_t/C_t)`, `dn_t = ln(L_t/C_t)`);
+  encadeia blocos até N dias: `ln S_j = Σ lr*`, máxima do dia `= S_j·e^{up}`, mínima `= S_j·e^{dn}`.
+  *Racional:* reamostrar blocos preserva parte da autocorrelação e da aglomeração de volatilidade, além das
+  caudas gordas reais; sortear a máxima/mínima junto dá barreiras intradiárias sem precisar da correção BGK.
+- **GBM (log-normal):** `ln S_{j+1} − ln S_j = μ_d + σ·√(1/252)·Z`, com `Z ~ N(0,1)` e variáveis antitéticas;
+  intradiário pela correção BGK (4.11).
+- **Retorno esperado da ação (drift)**, escolhido pelo usuário e aplicado **aos dois métodos**:
+
+| Opção | Retorno esperado anual μ |
+|---|---|
+| **CDI (padrão)** | CDI de hoje — visão neutra |
+| CDI + prêmio | CDI + 5 p.p. (editável) |
+| Zero | 0 |
+| Histórico | média dos log-retornos do período (com aviso) |
+| Personalizado | valor informado |
+
+  No GBM, `μ_d = (ln(1 + μ) − σ²/2)/252`. No bootstrap, troca-se a média dos log-retornos pelo drift escolhido
+  e, opcionalmente, escalam-se os desvios por um fator de vol `k`:
+
+```
+lr* = [ln(1 + μ)/252 − ½·k²·var(lr)] + k · (lr − média(lr))        ⇒ E[S_T] ≈ (1 + μ)^(N/252)
+```
+
+  (testado: a aproximação de ½σ² difere da calibração exata de E[e^r] em menos de 0,1 p.p. a.a.).
+  *Por que CDI como padrão:* a média histórica é estatisticamente pouco confiável — o erro padrão do drift
+  anual é ≈ σ/√anos (≈ ±8 p.p. em BBDC4, ±10,5 p.p. em PETR4; Merton, 1980), maior que o próprio prêmio de
+  risco —, e a sensibilidade é alta (revisão metodológica, Collar KI 3m em BBDC4, GBM com σ = 37%:
+  drift −10% a.a. → P(lucro) 41%; 0% → 46%; CDI → 53%; CDI + 5 p.p. → 55%).
 - Padrão: 10.000 caminhos, seed 42 (resultados reproduzíveis). Python e JS usam geradores aleatórios
   diferentes (NumPy PCG64 × mulberry32), então os números do Monte Carlo coincidem **estatisticamente**, não
   dígito a dígito.
@@ -262,9 +313,10 @@ Volatilidade usada: desvio-padrão dos log-retornos de todo o histórico carrega
 ### 4.11 Monitoramento de barreira: fechamento × intradiário
 
 - **Fechamento diário (padrão):** compara a barreira com o Close de cada pregão.
-- **Intradiário:** no histórico, usa a **máxima** do dia para barreiras de alta e a **mínima** para as de
-  baixa. No Monte Carlo (que só gera fechamentos) aplica a **correção de Broadie-Glasserman-Kou**: a barreira
-  é deslocada em direção ao preço por `β·σ·√Δt`, com `β = 0,5826` e `Δt = 1/252`:
+- **Intradiário:** no histórico e no bootstrap, usa a **máxima** do dia para barreiras de alta e a
+  **mínima** para as de baixa (no bootstrap, as sorteadas junto com o fechamento). No GBM (que só gera
+  fechamentos) aplica a **correção de Broadie-Glasserman-Kou**: a barreira é deslocada em direção ao preço
+  por `β·σ·√Δt`, com `β = 0,5826` e `Δt = 1/252`:
 
 ```
 barreira de alta efetiva  = B · exp(−0,5826 · σ · √(1/252))
@@ -291,16 +343,19 @@ Para janelas históricas e Monte Carlo, lado a lado (`summarize`, tolerância nu
 
 | Métrica | Cálculo |
 |---|---|
-| P(lucro > 0) | fração com retorno > 0 |
-| P(retorno > CDI do período) | fração com retorno > CDI da própria janela (ou do período, no MC) |
-| P(perda) / P(retorno = 0) | fração com retorno < 0 / = 0 |
+| P(lucro > 0) | fração com retorno > 0 — **primeiro indicador**, com IC 95% no histórico |
+| P(retorno > CDI de hoje) | fração com retorno > `(1 + CDI_hoje)^(N/252) − 1`, com IC 95% |
+| P(barreira acionada) | fração das janelas em que alguma barreira foi tocada, com IC 95% |
+| P(perda) / P(retorno = 0) | fração com retorno < 0 / = 0 (P(perda) com IC 95%) |
+| P(retorno > CDI da época) | só no histórico: retorno sem ajuste × CDI da própria janela (secundária) |
+| CVaR 5% | média dos 5% piores resultados (pelo menos um), ao lado do P5 |
 | P(atingir o retorno máximo) | fração com retorno ≥ máximo teórico − 10⁻⁶ |
 | Barreira acionada | fração das janelas em que cada evento de barreira foi tocado |
 | Média, mediana, P5, P25, P75, P95, pior, melhor | estatísticas do retorno; percentis com interpolação linear |
 | Retorno anualizado | `(1 + r)^(252/N) − 1` |
 | Só a ação | as mesmas estatísticas para `S_T − 1` |
 | P(estrutura > só a ação) | fração em que a estrutura rendeu mais que a ação |
-| CDI médio | média do CDI das janelas, e anualizado |
+| CDI de hoje no prazo / CDI médio da época | `(1 + CDI_hoje)^(N/252) − 1` / média do CDI das janelas, e anualizado |
 
 ### 4.14 Quadro de rentabilidade
 
@@ -473,6 +528,28 @@ porque corta os cenários de alta forte; e o cenário de juros define a chance d
 spread real). O spread de saída padrão (1%) é uma estimativa: ajuste quando souber o valor praticado. O modelo
 supõe que o investidor sempre aceita a desmontagem quando orientado.
 
+### 4.19 Incerteza: intervalos de confiança e cenários
+
+A revisão metodológica testou a capacidade preditiva do simulador (walk-forward, 722 datas, Collar KI 3m) com
+o *Brier score* (menor = melhor; 0,25 = chutar 50%): para **direção** (P(lucro), P(> CDI)), nenhum modelo — vol
+incondicional, realizada 63d, EWMA, GARCH — superou o "chute climatológico" (a frequência histórica); o GARCH
+melhorou levemente a **probabilidade de barreira** (volatilidade é previsível no curto prazo, direção não). Por
+isso a ferramenta comunica faixas, não números cravados.
+
+**Histórico — IC 95% por moving block bootstrap.** Para cada indicador 0/1 por janela (lucro, > CDI de hoje,
+perda, barreira, saída antecipada): sorteiam-se blocos de `N` janelas consecutivas (N = prazo, o tamanho da
+sobreposição) até completar a série, 1.000 vezes, e tomam-se os percentis 2,5% e 97,5% da média. Seed fixa e
+gerador **mulberry32 idêntico nos dois motores** ([`estruturadas/rng.py`](estruturadas/rng.py) e `E.rng`), de
+modo que Python e JS dão o mesmo intervalo (testado a 10⁻¹²). Margem típica: ±8 p.p. em 63 pregões (amostra
+efetiva ≈ 66), ±10 p.p. em 126, ±12–15 p.p. em 252. Ex.: Collar KI 3m em BBDC4, P(lucro) = 56% (IC 48%–64%).
+
+**Monte Carlo — grade de cenários.** Com 10.000 caminhos o erro de sorteio é desprezível; a incerteza que
+importa é de **premissa**. Roda-se uma grade de 9 cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol
+{0,8; 1,0; 1,2} × a vol de base —, com 5.000 caminhos cada e os **mesmos números aleatórios**, e mostram-se:
+o cenário central (CDI, vol 1,0) em destaque, a faixa mínimo–máximo de cada indicador e três tabelas de
+sensibilidade (P(lucro), P(> CDI de hoje), P(barreira)). A nota da tabela compara a vol de base com a vol
+realizada dos últimos 63 pregões, para mostrar se o momento atual está mais ou menos volátil que a média.
+
 ## 5. Presets e fórmulas do payoff
 
 Valores em % do valor inicial (S0 = 1). Nos exemplos com ação, custo das opções = 0.
@@ -510,8 +587,9 @@ Actions), **JSON** (dados, lâminas e fixtures) e **TOML/INI** (configurações)
 | [`presets.py`](estruturadas/presets.py) | 9 estruturas pré-definidas, fórmulas e textos em linguagem simples | `booster`, `collar`, `collar_ki`, `forward_knock_out`, `trava_alta`, `trava_baixa`, `straddle`, `strangle`, `protecao_total_bbdc4`, `PRESETS`, `describe` |
 | [`pricing.py`](estruturadas/pricing.py) | Black-Scholes (escalar e vetorizado); fórmula fechada de barreira; Monte Carlo neutro ao risco com antitéticas e BGK; custo líquido; solver de custo zero | `bs_price`, `bs_price_vec`, `barrier_price`, `gbm_paths`, `make_mc_context`, `mc_price_leg`, `price_structure`, `solve_zero_cost` |
 | [`data.py`](estruturadas/data.py) | Preços (yfinance, CSV), ajuste por proventos, vol histórica, Selic/CDI (API SGS), calendário de pregões | `normalize_ticker`, `load_prices_yf`, `parse_price_csv`, `historical_vol`, `fetch_selic_meta`, `fetch_cdi_daily`, `cdi_factor_on_index`, `b3_holidays`, `previous_business_day`, `count_trading_days`, `term_from_dates` |
-| [`backtest.py`](estruturadas/backtest.py) | Janelas históricas, bootstrap em blocos, GBM, ex-post | `historical_windows`, `run_historical`, `block_bootstrap_paths`, `gbm_drift_daily`, `run_monte_carlo`, `run_ex_post` |
-| [`metrics.py`](estruturadas/metrics.py) | Estatísticas, tabela comparativa, quadro de rentabilidade, métricas da saída antecipada | `summarize`, `comparison_table`, `default_variations`, `profitability_table`, `summarize_exit`, `exit_table`, `exit_by_cdi_regime` |
+| [`backtest.py`](estruturadas/backtest.py) | Janelas históricas (com ajuste ao CDI de hoje), bootstrap em blocos com máxima/mínima, GBM, drift controlado, grade de cenários, ex-post | `historical_windows`, `regime_factor`, `run_historical`, `ohlc_log_returns`, `drift_annual`, `bootstrap_ohlc_paths`, `bootstrap_drift_daily`, `gbm_drift_daily`, `run_monte_carlo`, `run_scenarios`, `run_ex_post` |
+| [`metrics.py`](estruturadas/metrics.py) | Estatísticas (com IC por block bootstrap e CVaR), tabela comparativa, quadro de rentabilidade, métricas da saída antecipada | `summarize`, `block_bootstrap_ci`, `cvar`, `comparison_table`, `default_variations`, `profitability_table`, `summarize_exit`, `exit_table`, `exit_by_cdi_regime` |
+| [`rng.py`](estruturadas/rng.py) | Gerador mulberry32 idêntico ao do JS (ICs iguais nos dois motores) | `Mulberry32` |
 | [`early_exit.py`](estruturadas/early_exit.py) | Saída antecipada: marcação diária a modelo, calibração, regra do gatilho; histórico, Monte Carlo e ex-post | `EarlyExitConfig`, `structure_value`, `rolling_vol`, `cdi_rate_series`, `simulate_exit`, `run_historical_exit`, `run_mc_exit`, `run_ex_post_exit` |
 | [`io.py`](estruturadas/io.py) | Import/export de lâminas em JSON (aceita nomes em pt e en) | `dumps`, `loads`, `save`, `load` |
 | [`charts.py`](estruturadas/charts.py) | Gráficos Plotly com separadores brasileiros | `payoff_chart`, `histogram_chart`, `windows_timeseries_chart`, `price_chart`, `ex_post_chart`, `mc_paths_chart` |
@@ -555,8 +633,9 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 
 | Arquivo | Linguagem | Função |
 |---|---|---|
-| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py) | Python (pytest) | 56 testes do motor Python |
-| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 13 testes do motor JS, incluindo comparação com o Python |
+| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py) | Python (pytest) | 66 testes do motor Python |
+| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 16 testes do motor JS, incluindo comparação com o Python |
+| [`scripts/pesquisa/`](scripts/pesquisa/) | Python | Experimentos da revisão metodológica (walk-forward, regime de juros) — referência, não produção |
 | [`.github/workflows/pages.yml`](.github/workflows/pages.yml) | YAML | Testes + dados + deploy no GitHub Pages |
 | [`.streamlit/config.toml`](.streamlit/config.toml) | TOML | Tema e servidor do Streamlit |
 | [`pytest.ini`](pytest.ini), [`requirements.txt`](requirements.txt), `.gitignore`, `.gitattributes` | INI/texto | Configuração de testes, dependências e git (fim de linha LF) |
@@ -585,8 +664,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 ## 8. Testes e validação cruzada Python × JS
 
 ```bash
-pytest                                   # 56 testes do motor Python
-node --test tests/js/engine.test.mjs     # 13 testes do motor JS
+pytest                                   # 66 testes do motor Python
+node --test tests/js/engine.test.mjs     # 16 testes do motor JS
 python scripts/make_js_fixtures.py       # regenera as referências após mudar o motor Python
 ```
 
@@ -722,6 +801,9 @@ Atalho: o preset **Proteção Total (BBDC4)** já traz essa tabela, a ação e a
 
 ### Premissas e limitações
 
+- **Baixa capacidade preditiva para direção.** Em testes walk-forward (2012–2026), as probabilidades de
+  lucro/superar o CDI não foram mais precisas que a frequência histórica; o modelo é mais útil para comparar
+  estruturas, dimensionar o risco de barreira e visualizar a distribuição de resultados.
 - **Passado não garante futuro.** Janelas sobrepostas são fortemente correlacionadas: a amostra efetiva é
   muito menor que o número de janelas.
 - Os parâmetros em % são aplicados igualmente em todas as janelas: a estrutura **não é reprecificada** com a
@@ -739,6 +821,9 @@ Atalho: o preset **Proteção Total (BBDC4)** já traz essa tabela, a ação e a
 
 ### Roadmap
 
+- **Fase 2 da revisão metodológica:** Monte Carlo FHS-GARCH (vol condicional, com variante assimétrica GJR)
+  como padrão, painel de volatilidade, marcação da saída antecipada com a vol do GARCH e painel de calibração
+  walk-forward (Brier do modelo × chute climatológico, diagrama de confiabilidade).
 - Reprecificar a estrutura em cada janela histórica com a vol e os juros da época.
 - Vol implícita e skew no modo Teórico; dividendos discretos.
 - Monitoramento intradiário no Monte Carlo com ponte browniana.

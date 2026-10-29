@@ -5,7 +5,7 @@
 > as decisões já tomadas, o estado atual e as armadilhas conhecidas. Detalhes de cálculo estão no
 > [README](../README.md); a metodologia em linguagem de usuário, em [METODOLOGIA.md](../METODOLOGIA.md).
 >
-> Última atualização: 22/10/2026 (inclui a saída antecipada).
+> Última atualização: 28/10/2026 (inclui a saída antecipada e a Fase 1 da revisão metodológica).
 
 ## 1. Quem é o usuário e como trabalhar com ele
 
@@ -66,7 +66,21 @@
       contratação); **calibrada ao preço pago** (offset do dia 0 amortizado linearmente) por padrão;
     - MC: 2.000 primeiros caminhos, vol e CDI constantes; histórico: CDI de cada dia;
     - resultado "com saída" sempre ao lado de "até o vencimento"; % do CDI e anualização pelo prazo efetivo;
-    - histórico separado por nível de CDI no início (≤ 8%, 8–12%, > 12%): o nível de juros domina o resultado.
+    - histórico separado por nível de CDI no início (≤ 8%, 8–12%, > 12%): o nível de juros domina o resultado
+      (essa tabela só aparece com o ajuste ao CDI de hoje desligado).
+11. **Revisão metodológica** (`docs/REVISAO_METODOLOGICA.md`, feita em outro chat; decisões do usuário em 28/10/2026):
+    - pergunta = "chance de dar certo se eu contratar **agora**" → condicional ao momento (CDI e vol de hoje);
+    - prazos típicos 3 meses (63 pregões), às vezes 6, 9 ou 12 → **padrão Collar KI 100/106/112, 3 meses**, com
+      atalhos de vértice 3/6/9/12m; a lâmina Proteção Total BBDC4 continua como preset;
+    - **CDI de referência = CDI efetivo mais recente** (série 12), editável (DI futuro do vencimento);
+    - **ajuste de regime** ligado por padrão nas janelas (e na saída antecipada); P(> CDI da época) secundária;
+    - **IC 95% por moving block bootstrap** (bloco = N, B = 1.000, gerador mulberry32 compartilhado Python/JS);
+    - **drift do MC = CDI por padrão** (opções: CDI + prêmio, zero, histórico com aviso, personalizado), também no
+      bootstrap; grade de 9 cenários drift × vol (5.000 caminhos, mesmos sorteios) com faixa mín–máx;
+    - extras escolhidos: **CVaR 5%** e **bootstrap sorteando fechamento + máxima + mínima juntos**;
+    - indicadores na ordem P(lucro) → P(> CDI de hoje) → P(barreira), sempre com faixa;
+    - **Fase 2 só depois da revisão do usuário**: FHS-GARCH (eu sugeri testar também GJR, assimétrico), painel de
+      vol, saída antecipada com vol do GARCH, painel de calibração walk-forward.
 
 ## 4. Estado atual (20/10/2026)
 
@@ -75,7 +89,7 @@
   - `e5e97a6` estrutura inicial · `bae8245` motor de payoff + presets · `27faaee` precificação ·
     `7980c97` dados/backtest/métricas · `8c18b52` fix pandas 3 · `c12226f` app Streamlit · `217b8b7` README ·
     `5c49e4a` motor JS · `218b596` site estático + workflow.
-- **Testes:** 56 pytest + 13 node, todos passando.
+- **Testes:** 66 pytest + 16 node, todos passando.
 - **Deploy:** GitHub Pages ativo com *Source: GitHub Actions*; primeiro deploy (run 39344983819) passou em todas
   as etapas; site conferido no ar (BBDC4/Proteção Total: 3.924 janelas, P(lucro) 100%, P>CDI 35,07%, barreira
   acionada 27,55%, ex-post +23,42% até 19/10/2026).
@@ -85,6 +99,12 @@
   histórico 69,1% de saídas (dia mediano 62), MC 21,9% (dia 224); operação real a 0,59 p.p. do gatilho em
   22/10/2026. Commits `bfed7af` (Python) e `04387b4` (JS) + o commit do site/Streamlit/docs — conferir
   `git log origin/main..` para saber o que falta enviar.
+- **Fase 1 da revisão (28/10/2026):** implementada nos dois motores, no site e no Streamlit (commits `1c7a4fb`,
+  `5df8527`, `194f71b` + documentação); **não enviada ao GitHub** até o usuário revisar. Números de referência
+  (Collar KI 3m BBDC4, dados até 28/10/2026, ajuste ligado): P(lucro) 57,8% (IC 50–65%), P(> CDI de hoje) 48,3%
+  (IC 41–56%), P(barreira) 44,6%, saída antecipada 53,4% (IC 46–61%), dia mediano 31.
+- **Mercado em 26/10/2026:** Ibovespa −13,9% em um dia (BBDC4 −24,5%, ITUB4 −13,7%); dado real, conferido. A vol
+  realizada de 63 pregões de BBDC4 foi a 63% (≈ 1,9× a média) — argumento a favor da Fase 2 (vol condicional).
 - **Pendências do usuário:** o GitHub exige ativar a verificação em duas etapas até **23/11/2026**, senão a conta
   fica restrita (afeta pushes). Há um comentário aberto no manual perguntando se as barreiras das lâminas da
   mesa costumam ser monitoradas no fechamento ou no intradiário.
@@ -169,6 +189,10 @@ Para acompanhar um deploy sem o `gh`:
 | `scipy.stats.norm.cdf` lento em laços grandes | `scipy.special.ndtr` nas funções vetorizadas |
 | Streamlit: mesmo gráfico em duas abas → `StreamlitDuplicateElementId` | passar `key=` distinto |
 | `build_site_data.py PETR4 …` com poucas ações apaga os JSON das outras em `site/data/precos` | normal (pasta local, fora do git); rodar sem argumentos para todas |
+| Yahoo devolve máxima/mínima = 0 (e volume 0) no pregão em andamento | `clean_prices` troca valores ≤ 0 pelo fechamento (o site já tratava) |
+| API do BCB com falha momentânea → CDI `None` → ajuste de regime desligado em silêncio | `fetch_cdi_daily` tenta 3 vezes por bloco; no Streamlit a falha não fica em cache |
+| Grade de cenários com 2.000 caminhos tinha ruído de ±1 p.p. (célula central ≠ MC principal) | 5.000 caminhos por cenário |
+| Heredocs longos no Bash deste ambiente quebram ("unexpected EOF") | escrever scripts de patch com a ferramenta de escrita e executá-los |
 
 ## 8. Ideias de próximos passos (roadmap)
 
@@ -178,6 +202,10 @@ Para acompanhar um deploy sem o `gh`:
 - Autocalls/estruturas com cupom; mais de um ativo.
 - Comparar várias estruturas lado a lado; IR e CDI líquido.
 - Link compartilhável com a estrutura codificada na URL (hoje o estado fica no `localStorage`).
+- **Fase 2 da revisão** (aguardando aval): FHS-GARCH/GJR como método padrão do MC (parâmetros pré-calculados no
+  `build_site_data.py` para o site; ajuste no worker para CSV), painel de vol (hoje, longo prazo, meia-vida),
+  BGK com σ do passo, saída antecipada marcada com a vol do GARCH, painel de calibração walk-forward (Brier ×
+  climatologia, diagrama de confiabilidade) sob demanda no worker.
 - Publicar o Streamlit no Community Cloud, se o usuário quiser.
 - Saída antecipada: calibrar spread de saída e adicional de vol com extratos de marcação do banco; vol
   implícita real via COTAHIST da B3 (ações com opções líquidas); vol variável no MC.

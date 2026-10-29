@@ -9,6 +9,13 @@
     el.innerHTML = `
       <div class="page-head"><div><h2>Metodologia e fontes</h2><p>Como o simulador calcula, quais convenções segue e o que ele não modela.</p></div></div>
       <div class="card"><div class="card-b prose">
+        <h3>A pergunta que o simulador responde</h3>
+        <p><b>“Qual a chance de esta estrutura dar certo se eu contratar agora?”</b> Por isso as probabilidades são condicionadas
+        ao momento atual: a régua é o <b>CDI de hoje</b> (CDI efetivo mais recente, editável em “Mais opções”; use o DI futuro do
+        vencimento, se souber), as janelas históricas são re-ancoradas nos juros de hoje e o Monte Carlo parte de um retorno
+        esperado neutro (o próprio CDI). Os indicadores vêm nesta ordem: <b>P(lucro)</b>, <b>P(retorno &gt; CDI de hoje)</b> e
+        <b>P(barreira acionada)</b>, sempre com uma faixa de incerteza.</p>
+
         <h3>1. A estrutura é uma lista de pernas</h3>
         <p>Cada linha da tabela espelha a “Composição da Estratégia” das lâminas: tipo (ação, call, put), posição (comprada/vendida),
         preço de exercício e barreira em % do valor inicial, tipo de barreira (Knock Up/Down and In/Out) e proporção (opções por ação).
@@ -30,12 +37,26 @@ só com opções:   retorno = valor final / c − 1   (exige c &gt; 0)</span>
         <p>Para cada pregão <i>t</i> com N pregões à frente, o caminho é <code>P[t+1 … t+N] / P[t]</code>, e a estrutura é aplicada com os
         mesmos parâmetros em todas as janelas. A fração de janelas com lucro estima a probabilidade de lucro “se você tivesse contratado num dia
         qualquer do passado”. A <b>amostra efetiva</b> (janelas não sobrepostas) é exibida porque janelas vizinhas são fortemente correlacionadas.</p>
+        <ul>
+          <li><b>Ajuste ao CDI de hoje</b> (padrão): cada caminho é multiplicado por <code>(1 + CDI hoje)^(k/252) ÷ CDI acumulado da época</code>.
+          Preserva o excesso de retorno da ação sobre o CDI de cada época e o re-ancora nos juros de hoje. Sem ele, estruturas com piso ou cupom
+          fixo ficam infladas em épocas de CDI baixo (Proteção Total 12m em BBDC4: P(&gt; CDI) de 35% com o CDI da época, 23% com o de hoje).</li>
+          <li><b>Intervalo de confiança (IC 95%)</b>: em 3 meses só ≈ 66 janelas são independentes, então cada probabilidade vem com um IC por
+          <i>moving block bootstrap</i> (blocos de N janelas consecutivas, 1.000 sorteios, percentis 2,5% e 97,5%). Ex.: Collar Knock In 3m em
+          BBDC4, P(lucro) = 56% (IC 48%–64%).</li>
+        </ul>
 
         <h3>5. Monte Carlo (complemento)</h3>
         <ul>
-          <li><b>Bootstrap em blocos</b> (padrão): sorteia blocos consecutivos (≈ 20 dias) dos log-retornos diários históricos e os encadeia —
-          preserva caudas gordas e parte da aglomeração de volatilidade.</li>
-          <li><b>GBM</b>: caminhos log-normais com a vol histórica e drift histórico, zero (retorno esperado nulo) ou CDI.</li>
+          <li><b>Bootstrap em blocos</b> (padrão): sorteia blocos consecutivos (≈ 20 dias) de dias reais — fechamento, máxima e mínima juntos
+          (barreiras intradiárias usam os extremos sorteados) — e os encadeia; preserva caudas gordas e parte da aglomeração de volatilidade.</li>
+          <li><b>GBM</b>: caminhos log-normais com a vol histórica (barreira intradiária pela correção de Broadie-Glasserman-Kou).</li>
+          <li><b>Retorno esperado da ação</b>: <b>CDI (padrão, visão neutra)</b>, CDI + prêmio (5 p.p.), zero, média histórica ou personalizado.
+          No bootstrap, troca-se a média dos log-retornos pelo drift escolhido: <code>lr* = (lr − média) + [ln(1+μ) − σ²/2]/252</code>, de modo que
+          E[S<sub>T</sub>] ≈ (1+μ)^(N/252). A média histórica é pouco confiável: erro padrão ≈ σ/√anos (≈ ±8 p.p. a.a. em BBDC4).</li>
+          <li><b>Sensibilidade às premissas</b>: o erro de sorteio é desprezível; a incerteza que importa é de premissa. Roda-se uma grade de 9
+          cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol {0,8; 1,0; 1,2} × a vol de base —, com os mesmos números aleatórios; as
+          faixas dos indicadores mostram o mínimo e o máximo entre eles.</li>
         </ul>
 
         <h3>6. Modo ex-post</h3>
@@ -91,7 +112,12 @@ gatilho no dia k        = 1,5 × (CDI acumulado de 0 a k)</span>
 
         <h3>Limitações</h3>
         <ul>
-          <li><b>Passado não garante futuro.</b> As janelas se sobrepõem: a amostra efetiva é muito menor que o número de janelas.</li>
+          <li><b>Passado não garante futuro.</b> As janelas se sobrepõem: a amostra efetiva é muito menor que o número de janelas — daí os ICs.</li>
+          <li><b>Baixa capacidade preditiva para direção.</b> Em testes fora da amostra (walk-forward, 2012–2026), as probabilidades de lucro e de
+          superar o CDI não foram mais precisas que a frequência histórica. O simulador é mais útil para <b>comparar estruturas, dimensionar o risco
+          de barreira e visualizar a distribuição</b> de resultados.</li>
+          <li>O ajuste ao CDI de hoje preserva o excesso de retorno da ação sobre o CDI de cada época: o histórico ainda carrega o prêmio de risco do
+          período. O Monte Carlo com retorno esperado = CDI é a visão neutra.</li>
           <li>Os parâmetros em % são aplicados igualmente em todas as janelas: a estrutura <b>não é reprecificada</b> com a vol e os juros de cada época.</li>
           <li>As lâminas nem sempre dizem se a barreira é monitorada no fechamento ou no intradiário, e isso muda a probabilidade de acionamento.</li>
           <li>Não modela risco de contraparte, chamada de margem, liquidez nem resgate antecipado a mercado.</li>
