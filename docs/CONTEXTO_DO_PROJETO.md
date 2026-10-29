@@ -82,10 +82,10 @@
     - **Fase 2 só depois da revisão do usuário**: FHS-GARCH (eu sugeri testar também GJR, assimétrico), painel de
       vol, saída antecipada com vol do GARCH, painel de calibração walk-forward.
 
-## 4. Estado atual (20/10/2026)
+## 4. Estado atual (28/10/2026)
 
-- Commits na `main` (todos enviados até `218b596`; este documento e o README novo podem estar só locais —
-  conferir com `git status` / `git log origin/main..`):
+- Commits na `main` (todos enviados até `7de331d`; conferir com `git status` / `git log origin/main..` se há
+  algo só local). Primeiros commits:
   - `e5e97a6` estrutura inicial · `bae8245` motor de payoff + presets · `27faaee` precificação ·
     `7980c97` dados/backtest/métricas · `8c18b52` fix pandas 3 · `c12226f` app Streamlit · `217b8b7` README ·
     `5c49e4a` motor JS · `218b596` site estático + workflow.
@@ -97,10 +97,10 @@
 - **Saída antecipada (22/10/2026):** implementada nos dois motores, no site (Mais opções → Saída antecipada;
   blocos no Backtest, Monte Carlo e Ex-post) e no Streamlit (seção 7 da barra lateral). Exemplo BBDC4:
   histórico 69,1% de saídas (dia mediano 62), MC 21,9% (dia 224); operação real a 0,59 p.p. do gatilho em
-  22/10/2026. Commits `bfed7af` (Python) e `04387b4` (JS) + o commit do site/Streamlit/docs — conferir
-  `git log origin/main..` para saber o que falta enviar.
+  22/10/2026. Commits `bfed7af` (Python), `04387b4` (JS) e `2688dc9` (site/Streamlit/docs), enviados.
 - **Fase 1 da revisão (28/10/2026):** implementada nos dois motores, no site e no Streamlit (commits `1c7a4fb`,
-  `5df8527`, `194f71b` + documentação); **não enviada ao GitHub** até o usuário revisar. Números de referência
+  `5df8527`, `194f71b`, `7de331d`); **enviada e publicada** (deploy run 40807283702, site conferido no ar com
+  dados até 28/10/2026 e CDI de hoje 13,65%). Aguardando a revisão do usuário antes da Fase 2. Números de referência
   (Collar KI 3m BBDC4, dados até 28/10/2026, ajuste ligado): P(lucro) 57,8% (IC 50–65%), P(> CDI de hoje) 48,3%
   (IC 41–56%), P(barreira) 44,6%, saída antecipada 53,4% (IC 46–61%), dia mediano 31.
 - **Mercado em 26/10/2026:** Ibovespa −13,9% em um dia (BBDC4 −24,5%, ITUB4 −13,7%); dado real, conferido. A vol

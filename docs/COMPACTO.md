@@ -40,7 +40,7 @@ barreira, vol realizada 63d + 3 pts, **calibrada ao preço pago** (offset do dia
 resultado (histórico separado por CDI ≤ 8%, 8–12%, > 12%).
 
 **Revisão metodológica** (`docs/REVISAO_METODOLOGICA.md`): pergunta = "chance de dar certo se contratar **agora**".
-**Fase 1 feita** (não enviada ao GitHub até o usuário revisar): CDI de hoje como régua (CDI efetivo, editável) e
+**Fase 1 feita e publicada** (aguardando revisão do usuário antes da Fase 2): CDI de hoje como régua (CDI efetivo, editável) e
 ajuste de regime nas janelas, IC 95% por block bootstrap (mulberry32 igual nos dois motores), drift do MC = CDI
 (padrão) inclusive no bootstrap, grade de cenários drift × vol, CVaR 5%, bootstrap com máxima/mínima, padrão
 Collar KI 100/106/112 em 3 meses com vértices 3/6/9/12m. **Fase 2 pendente:** FHS-GARCH/GJR, painel de vol,
@@ -51,8 +51,8 @@ painel de calibração walk-forward.
 antecipada: histórico 69% (dia mediano 62), MC 22% (dia 224) · operação real a 0,59 p.p. do gatilho em
 22/10/2026.
 
-**Estado:** no GitHub até `2688dc9` (saída antecipada); o compacto e a Fase 1 da revisão estão só locais até o
-usuário revisar (conferir com `git log origin/main..`). Testes: 66 pytest + 16 node. Mercado: Ibovespa −13,9% em 26/10/2026 (vol muito alta). Pendências do usuário: ativar 2FA no GitHub até 23/11/2026; descobrir o spread real de saída.
+**Estado:** tudo no GitHub até `7de331d` (Fase 1 da revisão), deploy no ar (conferir algo só local com
+`git log origin/main..`). Testes: 66 pytest + 16 node. Mercado: Ibovespa −13,9% em 26/10/2026 (vol muito alta). Pendências do usuário: ativar 2FA no GitHub até 23/11/2026; descobrir o spread real de saída.
 
 **Comandos:** `.venv/Scripts/python -m pytest -q` · `node --test tests/js/engine.test.mjs` ·
 `.venv/Scripts/python scripts/make_js_fixtures.py` (após mudar o motor Python) ·
