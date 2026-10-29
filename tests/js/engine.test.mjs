@@ -196,3 +196,60 @@ test("saída antecipada: regras (delay, carência, vencimento) e Monte Carlo", (
   assert.equal(em.n, 2000);
   for (let i = 0; i < em.n; i++) if (!em.early[i]) assert.equal(em.retFinal[i], mc.ret[i]);
 });
+
+/* ---------------- Fase 1 da revisão metodológica ---------------- */
+test("fase 1: gerador mulberry32, IC por block bootstrap e CVaR iguais ao Python", () => {
+  const F1 = FX.fase1;
+  const g = E.rng(2026);
+  closeArr(F1.rng.map(() => g.uni()), F1.rng, 1e-15, "mulberry32");
+  const g2 = E.rng(77);
+  assert.deepEqual(F1.rng_int.map(() => g2.int(13)), F1.rng_int);
+  for (const c of F1.ci) closeArr(E.blockBootstrapCi(Float64Array.from(c.ind), c.block), c.ci, 1e-12, `IC bloco ${c.block}`);
+  for (const [r, q, v] of F1.cvar) close(E.cvar(r, q), v, 1e-12, "CVaR");
+});
+
+test("fase 1: histórico com ajuste de regime e saída antecipada no CDI de hoje iguais ao Python", () => {
+  const F1 = FX.fase1;
+  const P = { d: FX.prices.d, c: Float64Array.from(FX.prices.c), h: Float64Array.from(FX.prices.h), l: Float64Array.from(FX.prices.l) };
+  const F = Float64Array.from(FX.saida.cdiF);
+  for (const fx of F1.regime) {
+    const s = E.PRESETS[fx.preset].build();
+    const res = E.runHistorical(s, P, fx.N, 0, fx.monitoring, fx.extra, F, F1.cdi_ref, true);
+    closeArr(res.ret, fx.ret, 1e-10, fx.preset + " ret ajustado");
+    closeArr(res.retRaw, fx.ret_raw, 1e-10, fx.preset + " ret sem ajuste");
+    closeArr(Array.from(res.anyHit), fx.hit, 0, fx.preset + " barreira");
+    const sm = E.summarize(res);
+    for (const [k, v] of Object.entries(fx.summary)) close(sm[k === "n_effective" ? "nEff" : k], v, 1e-9, `${fx.preset} ${k}`);
+    for (const [k, v] of Object.entries(fx.ci)) closeArr(sm.ci[k], v, 1e-12, `${fx.preset} IC ${k}`);
+    const sx = F1.saida_regime.find((x) => x.preset === fx.preset);
+    if (!sx) continue;
+    const ee = E.runHistoricalExit(s, P, fx.N, 0, {}, F, res.ret, fx.monitoring, fx.extra, F1.cdi_ref, true);
+    closeArr(Array.from(ee.exitDay), sx.dia_saida, 0, fx.preset + " dia saída (ajustado)");
+    closeArr(ee.retFinal, sx.retorno_final, 1e-9, fx.preset + " retorno final (ajustado)");
+    closeArr(ee.cdiPeriod, sx.cdi_periodo, 1e-12, fx.preset + " CDI do período (ajustado)");
+    const se = E.summarizeExit(ee);
+    for (const [k, v] of Object.entries(sx.summary)) close(se[k], v, 1e-9, `${fx.preset} saída ${k}`);
+    closeArr(se.ci.p_saida, sx.ci.p_saida, 1e-12, fx.preset + " IC saída");
+  }
+});
+
+test("fase 1: drift no bootstrap, máxima/mínima sorteadas e grade de cenários", () => {
+  const P = { d: FX.prices.d, c: Float64Array.from(FX.prices.c), h: Float64Array.from(FX.prices.h), l: Float64Array.from(FX.prices.l) };
+  const { lr, up, dn } = E.ohlcLogReturns(P);
+  const N = 63, mu = 0.13;
+  const sum = E.blockBootstrapSummary(lr, 20000, N, 20, 5, 50, { driftDaily: E.bootstrapDriftDaily(lr, mu), scale: 1, up, dn });
+  let m = 0, v = 0;
+  for (const x of sum.sT) m += x; m /= sum.sT.length;
+  for (const x of sum.sT) v += (x - m) ** 2; const se = Math.sqrt(v / (sum.sT.length - 1) / sum.sT.length);
+  assert.ok(Math.abs(m - (1 + mu) ** (N / 252)) < 4 * se, `E[S_T] ${m}`);
+  for (let i = 0; i < 50; i++) for (let j = 0; j < N; j++) assert.ok(sum.sampleH[i][j] >= sum.sample[i][j] - 1e-12 && sum.sampleL[i][j] <= sum.sample[i][j] + 1e-12);
+  const s = E.PRESETS.collar_ki.build(1.0, 1.06, 1.12);
+  const a = E.runMonteCarlo(s, P, N, 0, { nPaths: 4000, cdiAnnual: 0.12, monitoring: "close" });
+  const b = E.runMonteCarlo(s, P, N, 0, { nPaths: 4000, cdiAnnual: 0.12, monitoring: "intraday" });
+  assert.ok(E.summarize(b).p_barreira >= E.summarize(a).p_barreira);
+  assert.equal(a.drift, "cdi");
+  const g = E.runScenarios(s, P, N, 0, { cdiAnnual: 0.12, nPaths: 3000 });
+  assert.equal(g.length, 9);
+  for (const d of E.SCENARIO_DRIFTS) { const r = g.filter((x) => x.drift === d); assert.ok(r[0].p_barreira <= r[1].p_barreira && r[1].p_barreira <= r[2].p_barreira, d); }
+  for (const vs of E.SCENARIO_VOLS) { const r = E.SCENARIO_DRIFTS.map((d) => g.find((x) => x.drift === d && x.volScale === vs)); assert.ok(r[0].p_lucro <= r[1].p_lucro && r[1].p_lucro <= r[2].p_lucro, String(vs)); }
+});

@@ -126,32 +126,37 @@
   }
 
   /* Saída antecipada em todas as janelas históricas (mesmas janelas de runHistorical). */
-  E.runHistoricalExit = function (s, P, N, cost, cfg, cdiF, retHold, monitoring = "close", extra = 0) {
+  /* Com regimeAdjust (e cdiRef): caminhos re-ancorados no CDI de hoje e CDI de hoje no gatilho e na marcação
+     (retHold deve vir do runHistorical com o mesmo ajuste). */
+  E.runHistoricalExit = function (s, P, N, cost, cfg, cdiF, retHold, monitoring = "close", extra = 0, cdiRef = null, regimeAdjust = false) {
     cfg = Object.assign({}, E.EXIT_DEFAULTS, cfg);
     const n = P.c.length - N, rates = E.cdiRateSeries(cdiF), rv = E.rollingVol(P.c, cfg.volWindow).map((v) => v + cfg.volAdd);
-    const intra = monitoring === "intraday", rows = [], cdiStart = new Float64Array(n);
+    const intra = monitoring === "intraday", rows = [], cdiStart = new Float64Array(n), adj = !!(regimeAdjust && cdiRef != null);
+    const rRef = adj ? Math.log1p(cdiRef) : 0;
     for (let t = 0; t < n; t++) {
       const base = P.c[t];
       const get = (k) => {
-        const i = t + k, S = P.c[i] / base;
-        return { S, up: intra ? Math.max(P.h[i] / base, S) : S, down: intra ? Math.min(P.l[i] / base, S) : S,
-          r: rates[i], sig: cfg.volMode === "fixed" ? rv[t] : rv[i], cdi: cdiF[i] / cdiF[t] - 1 };
+        const i = t + k, f = adj ? Math.pow(1 + cdiRef, k / TD) / (cdiF[i] / cdiF[t]) : 1, S = (P.c[i] / base) * f;
+        return { S, up: intra ? Math.max((P.h[i] / base) * f, S) : S, down: intra ? Math.min((P.l[i] / base) * f, S) : S,
+          r: adj ? rRef : rates[i], sig: cfg.volMode === "fixed" ? rv[t] : rv[i], cdi: adj ? Math.pow(1 + cdiRef, k / TD) - 1 : cdiF[i] / cdiF[t] - 1 };
       };
-      rows.push(exitPath(s, N, get, cost, cfg, retHold[t], monitoring, extra, rates[t], rv[t]));
+      rows.push(exitPath(s, N, get, cost, cfg, retHold[t], monitoring, extra, adj ? rRef : rates[t], rv[t]));
       cdiStart[t] = Math.expm1(rates[t]);
     }
     return pack(rows, retHold, N, { cdiStart, start: P.d.slice(0, n), kind: "historico", cfg });
   };
 
   /* Saída antecipada nos caminhos completos guardados pelo Monte Carlo (vol e CDI constantes). */
-  E.runMcExit = function (s, paths, N, cost, cfg, retHold, sigmaHist, cdiAnnual, monitoring = "close", extra = 0) {
+  /* high/low: máximas e mínimas sorteadas pelo bootstrap (intradiário sem BGK); sem elas, toques pela barreira deslocada. */
+  E.runMcExit = function (s, paths, N, cost, cfg, retHold, sigmaHist, cdiAnnual, monitoring = "close", extra = 0, high = null, low = null) {
     cfg = Object.assign({}, E.EXIT_DEFAULTS, cfg);
     const m = Math.min(cfg.mcPaths, paths.length), r = Math.log1p(cdiAnnual), sig = sigmaHist + cfg.volAdd;
-    const hs = monitoring === "intraday" ? E.BGK_BETA * sigmaHist * Math.sqrt(1 / TD) : 0, eu = Math.exp(hs), ed = Math.exp(-hs);
+    const hl = monitoring === "intraday" && high && low;
+    const hs = monitoring === "intraday" && !hl ? E.BGK_BETA * sigmaHist * Math.sqrt(1 / TD) : 0, eu = Math.exp(hs), ed = Math.exp(-hs);
     const mon = monitoring === "intraday" ? "continuous" : "close", rows = [];
     for (let p = 0; p < m; p++) {
-      const row = paths[p];
-      const get = (k) => { const S = row[k - 1]; return { S, up: S * eu, down: S * ed, r, sig, cdi: Math.pow(1 + cdiAnnual, k / TD) - 1 }; };
+      const row = paths[p], rh = hl ? high[p] : null, rl = hl ? low[p] : null;
+      const get = (k) => { const S = row[k - 1]; return { S, up: rh ? rh[k - 1] : S * eu, down: rl ? rl[k - 1] : S * ed, r, sig, cdi: Math.pow(1 + cdiAnnual, k / TD) - 1 }; };
       rows.push(exitPath(s, N, get, cost, cfg, retHold[p], mon, extra, r, sig));
     }
     return pack(rows, retHold, N, { kind: "mc", cfg });
@@ -201,6 +206,7 @@
       if (r[i] > TOL) lucro++; if (r[i] < -TOL) perda++; if (r[i] > x.cdiPeriod[i] + TOL) cdi++;
     }
     return {
+      ci: x.kind === "historico" ? { p_saida: E.blockBootstrapCi(Float64Array.from(x.early), x.N) } : {}, cvar5: E.cvar(r, 0.05),
       n, p_gatilho: trig / n, p_saida: early / n,
       dias_p25: ex.length ? pct(ex, 25) : NaN, dias_mediana: ex.length ? pct(ex, 50) : NaN, dias_p75: ex.length ? pct(ex, 75) : NaN,
       ret_saida_media: early ? exitRet / early : NaN, media: mean(r), mediana: pct(rs, 50), media_venc: mean(Array.from(x.retHold)),

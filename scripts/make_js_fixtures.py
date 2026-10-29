@@ -99,7 +99,8 @@ def main() -> None:
         out["historico"].append({"preset": key, "N": N, "monitoring": mon, "extra": 0.002,
                                  "ret": res.df["retorno"].to_numpy(), "hit": res.df["barreira_qualquer"].astype(int).to_numpy(),
                                  "cdi": res.df["retorno_cdi"].to_numpy(), "n_effective": res.n_effective,
-                                 "summary": {k: v for k, v in summ.items() if k != "barreiras"}})
+                                 "summary": {k: v for k, v in summ.items() if k not in ("barreiras", "ci")},
+                                 "ci": summ["ci"]})
 
     # Ex-post
     for key, t0, exp, mon in (("collar_ki", "2020-02-03", "2020-08-14", "intraday"), ("fko", "2020-06-01", "2021-06-01", "close"),
@@ -156,6 +157,40 @@ def main() -> None:
                                        "trigger": x.trigger_date.strftime("%Y-%m-%d") if x.trigger_date is not None else None,
                                        "exit": x.exit_date.strftime("%Y-%m-%d") if x.exit_date is not None else None,
                                        "exit_return": x.exit_return})
+
+    # Fase 1 da revisão: gerador compartilhado, IC por block bootstrap, ajuste de regime, CVaR
+    from estruturadas.metrics import block_bootstrap_ci, cvar, summarize_exit
+    from estruturadas.rng import Mulberry32
+    g = Mulberry32(2026)
+    rr = np.random.default_rng(9)
+    ind = (np.cumsum(rr.normal(size=700)) > 0).astype(float)
+    out["fase1"] = {
+        "rng": [g.uni() for _ in range(25)],
+        "rng_int": (lambda m: [m.int(13) for _ in range(20)])(Mulberry32(77)),
+        "ci": [{"ind": ind, "block": b, "ci": block_bootstrap_ci(ind, b)} for b in (1, 21, 63, 700)],
+        "cvar": [[[0.03, -0.2, 0.1, -0.05, 0.0, 0.07, -0.01], 0.05, cvar([0.03, -0.2, 0.1, -0.05, 0.0, 0.07, -0.01], 0.05)],
+                 [[1, 2, 3, 4], 0.5, cvar([1, 2, 3, 4], 0.5)]],
+        "regime": [], "saida_regime": [],
+    }
+    CDI_REF = 0.1365
+    for key, N, mon in (("collar_ki", 63, "close"), ("protecao_total", 120, "intraday"), ("fko", 40, "close")):
+        s = presets.PRESETS[key].builder()
+        res = run_historical(s, prices, N, 0.0, mon, 0.001, cf_var, cdi_ref=CDI_REF, regime_adjust=True)
+        summ = summarize(res)
+        out["fase1"]["regime"].append({"preset": key, "N": N, "monitoring": mon, "extra": 0.001,
+                                       "ret": res.df["retorno"].to_numpy(), "ret_raw": res.df["retorno_sem_ajuste"].to_numpy(),
+                                       "hit": res.df["barreira_qualquer"].astype(int).to_numpy(),
+                                       "summary": {k: v for k, v in summ.items() if k not in ("barreiras", "ci")},
+                                       "ci": summ["ci"]})
+        if key != "fko":
+            ee = run_historical_exit(s, prices, N, 0.0, EarlyExitConfig(), cf_var, res.df["retorno"].to_numpy(), mon,
+                                     0.001, cdi_ref=CDI_REF, regime_adjust=True)
+            se = summarize_exit(ee)
+            out["fase1"]["saida_regime"].append({
+                "preset": key, "N": N, "monitoring": mon, "dia_saida": ee.df["dia_saida"].to_numpy(),
+                "retorno_final": ee.df["retorno_final"].to_numpy(), "cdi_periodo": ee.df["cdi_periodo"].to_numpy(),
+                "summary": {k: v for k, v in se.items() if k != "ci"}, "ci": se["ci"]})
+    out["fase1"]["cdi_ref"] = CDI_REF
 
     # Calendário
     out["calendario"] = {
