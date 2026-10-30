@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Simulador de Operações Estruturadas — Guia completo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0e2a33; --ink-2: #1c3f4a; --ink-3: #2e5562; --lime: #a8cf38; --lime-soft: #eef6d6;
+    --bg: #f4f5f2; --surface: #ffffff; --surface-2: #f8f9f6; --line: #e2e6e0; --line-strong: #cfd6cf;
+    --text: #0e2a33; --text-2: #4b5f66; --muted: #7d8f95; --pos: #16704a; --neg: #b4282c;
+    --blue: #2a78d6; --orange: #eb6834; --aqua: #1baf7a; --warn-bg: #fff6e0; --warn-line: #f0d9a0;
+  }
+  @page { size: A4; margin: 17mm 16mm 19mm 16mm; }
+  @page :first { margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font: 9.6pt/1.55 "Inter", "Segoe UI", system-ui, sans-serif; color: var(--text); -webkit-print-color-adjust: exact; print-color-adjust: exact;
+         font-feature-settings: "tnum" 1; }
+  p { margin: 0 0 7px; }
+  b, strong { font-weight: 600; }
+  a { color: var(--ink-3); }
+  ul, ol { margin: 0 0 8px; padding-left: 18px; }
+  li { margin: 2px 0; }
+  code, .mono { font-family: "Cascadia Mono", Consolas, "Courier New", monospace; font-size: 8.6pt; background: var(--surface-2); padding: 0 3px; border-radius: 3px; }
+
+  /* ---------- Capa ---------- */
+  .cover { width: 210mm; height: 297mm; background: var(--ink); color: #fff; position: relative; overflow: hidden; break-after: page; }
+  .cover .band { position: absolute; left: 0; right: 0; bottom: 0; height: 92mm; background: var(--ink-2); }
+  .cover .inner { position: absolute; left: 22mm; right: 22mm; top: 30mm; }
+  .cover .mark { width: 22mm; height: 22mm; }
+  .cover .kicker { margin-top: 18mm; font-size: 10pt; letter-spacing: .14em; text-transform: uppercase; color: var(--lime); font-weight: 600; }
+  .cover .title { font-size: 31pt; line-height: 1.12; margin: 5mm 0 6mm; font-weight: 700; letter-spacing: -.01em; }
+  .cover .sub { font-size: 13pt; line-height: 1.45; color: #cfdde0; max-width: 150mm; }
+  .cover .chips { margin-top: 12mm; display: flex; flex-wrap: wrap; gap: 3mm; }
+  .cover .chip { border: 1px solid rgba(255,255,255,.25); border-radius: 99px; padding: 1.6mm 4mm; font-size: 9pt; color: #e3eef0; }
+  .cover .chip b { color: var(--lime); }
+  .cover .foot { position: absolute; left: 22mm; right: 22mm; bottom: 20mm; font-size: 8.6pt; color: #b9c9cd; line-height: 1.5; }
+  .cover .foot .url { color: #fff; font-weight: 600; font-size: 10pt; margin-bottom: 4mm; }
+  .cover .art { position: absolute; right: 18mm; bottom: 108mm; width: 92mm; opacity: .95; }
+
+  /* ---------- Títulos ---------- */
+  h1.sec { font-size: 19pt; line-height: 1.2; margin: 0 0 5mm; padding-bottom: 3mm; border-bottom: 2.5px solid var(--lime); break-before: page; break-after: avoid; }
+  h1.sec .n { color: var(--lime); background: var(--ink); border-radius: 6px; padding: 0 2.6mm; margin-right: 2.6mm; font-size: 15pt; vertical-align: 2px; }
+  h2 { font-size: 13pt; margin: 7mm 0 2.5mm; break-after: avoid; color: var(--ink); }
+  h3 { font-size: 10.6pt; margin: 5mm 0 1.8mm; break-after: avoid; color: var(--ink-2); }
+  .lead { font-size: 10.8pt; color: var(--text-2); line-height: 1.55; margin-bottom: 4mm; }
+
+  /* ---------- Blocos ---------- */
+  .callout { background: var(--lime-soft); border-left: 4px solid var(--lime); border-radius: 0 8px 8px 0; padding: 3mm 4mm; margin: 3mm 0 4mm; break-inside: avoid; }
+  .callout.ink { background: #edf2f3; border-left-color: var(--ink-3); }
+  .callout.warn { background: var(--warn-bg); border-left-color: #e0a419; }
+  .callout .t { font-weight: 700; font-size: 9pt; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); margin-bottom: 1mm; }
+  .formula { font-family: "Cascadia Mono", Consolas, "Courier New", monospace; font-size: 8.4pt; line-height: 1.55; background: var(--surface-2); border: 1px solid var(--line);
+             border-radius: 8px; padding: 2.6mm 3.6mm; margin: 2mm 0 3.5mm; white-space: pre-wrap; break-inside: avoid; color: var(--ink); }
+  table { border-collapse: collapse; width: 100%; font-size: 8.7pt; margin: 2mm 0 4mm; break-inside: auto; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  th { text-align: left; font-size: 7.3pt; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); font-weight: 600; border-bottom: 1.5px solid var(--line-strong); padding: 4px 6px; }
+  td { border-bottom: 1px solid var(--line); padding: 4px 6px; vertical-align: top; }
+  td.r, th.r { text-align: right; white-space: nowrap; }
+  tr.hl td { background: var(--lime-soft); }
+  .pos { color: var(--pos); } .neg { color: var(--neg); } .muted { color: var(--muted); } .small { font-size: 8.4pt; }
+
+  figure { margin: 3mm 0 4.5mm; break-inside: avoid; }
+  figure img { display: block; width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+  figure.w70 img { width: 70%; } figure.w55 img { width: 55%; } figure.w40 img { width: 40%; } figure.w85 img { width: 85%; }
+  figcaption { font-size: 8.1pt; color: var(--muted); margin-top: 1.6mm; line-height: 1.45; }
+  figcaption b { color: var(--text-2); }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 3mm; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 2mm 0 4mm; break-inside: avoid; }
+  .kpis div { padding: 2.4mm 3mm; border-right: 1px solid var(--line); }
+  .kpis div:last-child { border-right: 0; }
+  .kpis .l { font-size: 7.4pt; color: var(--text-2); }
+  .kpis .v { font-size: 11.5pt; font-weight: 600; margin-top: .6mm; white-space: nowrap; }
+  .kpis .h { font-size: 7.4pt; color: var(--muted); }
+
+  /* Passos */
+  .step { display: grid; grid-template-columns: 10mm 1fr; gap: 3mm; margin: 6mm 0 2mm; break-after: avoid; }
+  .step .num { width: 10mm; height: 10mm; border-radius: 50%; background: var(--ink); color: var(--lime); font-weight: 700; font-size: 11pt; display: flex; align-items: center; justify-content: center; }
+  .step h2 { margin: 1.4mm 0 0; font-size: 12.4pt; }
+  .where { display: inline-block; font-size: 7.6pt; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); background: #edf2f3; border-radius: 4px; padding: .4mm 2mm; margin-bottom: 1.6mm; }
+
+  /* Estruturas */
+  .preset { display: grid; grid-template-columns: 70mm 1fr; gap: 4.5mm; border: 1px solid var(--line); border-radius: 10px; padding: 3.2mm 3.8mm; margin: 0 0 3.6mm; break-inside: avoid; }
+  .preset h3 { margin: 0 0 1.5mm; font-size: 11.6pt; color: var(--ink); }
+  .preset .tag { display: inline-block; font-size: 7.3pt; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: .4mm 2mm; border-radius: 4px; background: var(--lime-soft); color: var(--ink-3); margin: 0 1.5mm 1.5mm 0; }
+  .preset .legs { font-size: 8.3pt; color: var(--text-2); margin-bottom: 1.2mm; }
+  .preset .chart svg { width: 100%; height: auto; display: block; }
+  .preset .chart .cap { font-size: 7.8pt; color: var(--muted); margin-top: 1mm; line-height: 1.4; }
+  .preset dl { margin: 0; font-size: 8.5pt; line-height: 1.48; }
+  .preset dt { font-weight: 600; color: var(--ink-2); margin-top: 1mm; }
+  .preset dd { margin: 0; }
+  .legend { display: flex; gap: 5mm; font-size: 8pt; color: var(--text-2); margin: 1mm 0 3mm; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 7mm; height: 0; border-top: 2.4px solid; vertical-align: 3px; margin-right: 1.6mm; }
+
+  /* Sumário */
+  .toc { margin-top: 4mm; }
+  .toc a { display: flex; align-items: baseline; text-decoration: none; color: var(--text); padding: 1.5mm 0; border-bottom: 1px dotted var(--line-strong); }
+  .toc a .n { width: 9mm; color: var(--ink-3); font-weight: 700; }
+  .toc a .t { flex: 1; }
+  .toc a .p { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .toc a.sub { padding-left: 9mm; font-size: 8.8pt; color: var(--text-2); border-bottom-style: none; padding-top: .6mm; padding-bottom: .6mm; }
+  .glossary td:first-child { font-weight: 600; white-space: nowrap; width: 33mm; }
+  .refs li { margin: .5mm 0; font-size: 8.2pt; line-height: 1.4; }
+  .avoid, .stepblock { break-inside: avoid; }
+  .pb { break-before: page; }
+</style>
+</head>
+<body>
+
+<!-- =============================== CAPA =============================== -->
+<section class="cover">
+  <div class="band"></div>
+  <svg class="art" viewBox="0 0 360 200" aria-hidden="true">
+    <line x1="10" y1="170" x2="350" y2="170" stroke="#ffffff" stroke-opacity=".25" stroke-width="2"/>
+    <polyline points="10,150 120,150 230,60 300,60 350,60" fill="none" stroke="#a8cf38" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="10,190 120,150 230,60 350,-30" fill="none" stroke="#ffffff" stroke-opacity=".35" stroke-width="2.4" stroke-dasharray="7 7"/>
+    <line x1="230" y1="20" x2="230" y2="180" stroke="#eb6834" stroke-width="2" stroke-dasharray="5 5"/>
+    <text x="236" y="32" fill="#eb6834" font-size="13" font-family="Inter, Segoe UI, sans-serif">barreira</text>
+  </svg>
+  <div class="inner">
+    <svg class="mark" viewBox="0 0 34 34"><line x1="4" y1="29" x2="30" y2="29" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity=".55"/><polyline points="4,23 15,23 30,7" fill="none" stroke="#a8cf38" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div class="kicker">Guia completo · especialistas de investimentos</div>
+    <div class="title">Simulador de<br>Operações Estruturadas</div>
+    <div class="sub">O que é uma estruturada, os tipos e como funcionam, o modelo e os métodos estatísticos por trás das probabilidades, e um passo a passo do simulador com exemplos reais.</div>
+    <div class="chips">
+      <span class="chip">Backtest histórico com <b>IC 95%</b></span>
+      <span class="chip">Monte Carlo <b>FHS-GARCH</b></span>
+      <span class="chip">Saída antecipada a <b>150% do CDI</b></span>
+      <span class="chip">Teste de <b>calibração</b></span>
+    </div>
+  </div>
+  <div class="foot">
+    <div class="url">viniciusmarquesserpeloni-commits.github.io/estruturadas-sim</div>
+    Versão de outubro de 2026 · exemplos com dados até 28/10/2026 e CDI de 13,65% a.a.<br>
+    Ferramenta educacional e independente, sem afiliação a nenhuma instituição financeira. Não é recomendação de investimento. Rentabilidade passada não garante rentabilidade futura; retornos simulados brutos de IR.
+  </div>
+</section>
+
+<!-- =============================== SUMÁRIO =============================== -->
+<section>
+  <h1 class="sec" style="break-before: auto">Sumário</h1>
+  <div class="toc">
+    <a href="#s0"><span class="n"></span><span class="t">Como usar este guia</span><span class="p">{{P:s0}}</span></a>
+    <a href="#s1"><span class="n">1</span><span class="t">O que é uma operação estruturada</span><span class="p">{{P:s1}}</span></a>
+    <a href="#s2"><span class="n">2</span><span class="t">Tipos de estrutura e como cada uma funciona</span><span class="p">{{P:s2}}</span></a>
+    <a href="#s3"><span class="n">3</span><span class="t">Como o simulador funciona</span><span class="p">{{P:s3}}</span></a>
+    <a href="#s4"><span class="n">4</span><span class="t">Métodos estatísticos que balizam o modelo</span><span class="p">{{P:s4}}</span></a>
+    <a href="#s5"><span class="n">5</span><span class="t">Passo a passo no simulador</span><span class="p">{{P:s5}}</span></a>
+    <a href="#s6"><span class="n">6</span><span class="t">Exemplos práticos</span><span class="p">{{P:s6}}</span></a>
+    <a class="sub" href="#s6a"><span class="t">Exemplo 1 — Collar Knock In de 3 meses em BBDC4</span><span class="p">{{P:s6a}}</span></a>
+    <a class="sub" href="#s6b"><span class="t">Exemplo 2 — a lâmina Proteção Total BBDC4, do backtest ao ex-post</span><span class="p">{{P:s6b}}</span></a>
+    <a href="#s7"><span class="n">7</span><span class="t">Como ler e comunicar os resultados</span><span class="p">{{P:s7}}</span></a>
+    <a href="#s8"><span class="n">8</span><span class="t">Limitações, avisos e referências</span><span class="p">{{P:s8}}</span></a>
+  </div>
+
+  <h2 id="s0" style="margin-top: 10mm">Como usar este guia</h2>
+  <p>Este guia foi escrito para quem já conhece o mercado — especialistas de investimentos, assessores e gestores —, mas quer entender <b>exatamente</b> o que o simulador calcula, por que os números são os que são e como usá-los na conversa com o cliente.</p>
+  <ul>
+    <li><b>Seções 1 e 2</b> — o vocabulário das lâminas (pernas, strikes, barreiras Knock In / Knock Out) e as nove estruturas prontas do simulador, com o gráfico de resultado de cada uma.</li>
+    <li><b>Seções 3 e 4</b> — o modelo: backtest por janelas históricas, Monte Carlo com volatilidade condicional (FHS-GARCH), custo das opções, saída antecipada, e os métodos estatísticos que sustentam cada número (intervalos de confiança, bootstrap, GARCH, Brier score).</li>
+    <li><b>Seções 5 e 6</b> — o passo a passo, tela por tela, e dois exemplos completos com dados reais de BBDC4 (incluindo a queda de 26/10/2026).</li>
+    <li><b>Seções 7 e 8</b> — como comunicar as probabilidades com honestidade e as limitações da ferramenta.</li>
+  </ul>
+  <div class="callout">
+    <div class="t">A pergunta que o simulador responde</div>
+    <b>“Qual a chance de esta estrutura dar certo se eu contratar agora?”</b> Por isso as probabilidades são condicionadas ao momento atual — régua no <b>CDI de hoje</b>, histórico re-ancorado nos juros de hoje, Monte Carlo que parte da <b>volatilidade de hoje</b> — e sempre aparecem com uma <b>faixa de incerteza</b>. Os indicadores principais vêm nesta ordem: <b>P(lucro) → P(retorno &gt; CDI de hoje) → P(barreira acionada)</b>.
+  </div>
+  <p class="small muted">Convenções do guia: números com vírgula decimal; “pregão” = dia útil da B3 (1 mês = 21 pregões, 1 ano = 252); strikes e barreiras em % do preço da ação na contratação (100% = preço inicial). Os exemplos usam dados até 28/10/2026 e o CDI efetivo de 13,65% a.a.; ao abrir o site em outra data, os números mudam com os dados.</p>
+</section>
+
+<!-- =============================== 1 =============================== -->
+<section>
+  <h1 class="sec" id="s1"><span class="n">1</span> O que é uma operação estruturada</h1>
+  <p class="lead">Uma operação estruturada combina a ação com opções (ou usa só opções) para desenhar, já na contratação, qual será o resultado em cada cenário de preço no vencimento. O investidor troca parte do comportamento “puro” da ação por algo que combine melhor com a sua visão: proteção contra quedas, participação maior na alta, um retorno fixo condicionado ou ganho com movimentos fortes.</p>
+
+  <h2>1.1 Os blocos de montagem</h2>
+  <table>
+    <thead><tr><th>Bloco</th><th>O que é</th><th>Comprado (+)</th><th>Vendido (−)</th></tr></thead>
+    <tbody>
+      <tr><td><b>Ação</b></td><td>A própria ação, ganho e perda 1:1</td><td>ganha na alta, perde na queda</td><td>—</td></tr>
+      <tr><td><b>Call</b> (opção de compra)</td><td>Direito de <b>comprar</b> a ação pelo strike K no vencimento: vale max(S − K, 0)</td><td>ganha com a alta acima de K; paga prêmio</td><td>recebe prêmio; abre mão da alta acima de K</td></tr>
+      <tr><td><b>Put</b> (opção de venda)</td><td>Direito de <b>vender</b> a ação pelo strike K: vale max(K − S, 0)</td><td>protege abaixo de K; paga prêmio</td><td>recebe prêmio; assume a perda abaixo de K</td></tr>
+      <tr><td><b>Barreira</b></td><td>Nível de preço que liga (<b>Knock In</b>) ou desliga (<b>Knock Out</b>) uma opção se for tocado <b>em algum momento</b> até o vencimento</td><td colspan="2">Up = barreira acima do preço inicial; Down = abaixo. Ex.: “Knock Up and In 143%” = opção que só passa a existir se a ação tocar 143%.</td></tr>
+    </tbody>
+  </table>
+  <p>Cada linha da tabela “Composição da Estratégia” da lâmina é uma <b>perna</b>: tipo (ação, call, put), posição (compra ou venda), strike em % do preço inicial, barreira (tipo e nível) e proporção (quantas opções por ação). O simulador usa exatamente essa linguagem.</p>
+
+  <h2>1.2 O que entra na conta</h2>
+  <ul>
+    <li><b>Custo líquido das opções</b> (<i>c</i>): prêmios pagos menos prêmios recebidos, em % do valor inicial. Quase todas as estruturas com ação são montadas com <b>custo zero</b>: a opção comprada é financiada pela vendida, e os strikes/barreiras são ajustados para isso.</li>
+    <li><b>Vencimento e apuração</b>: o resultado é apurado no fechamento do pregão anterior ao vencimento (D−1); a liquidação é em D+1.</li>
+    <li><b>Monitoramento da barreira</b>: no fechamento diário ou intradiário (máxima/mínima do dia). Muda bastante a chance de acionamento — a lâmina nem sempre diz qual é; vale confirmar com a mesa.</li>
+    <li><b>Proventos</b>: as lâminas ajustam strikes e barreiras em eventos corporativos; o simulador usa o preço <b>ajustado por proventos</b>, que é a aproximação padrão.</li>
+  </ul>
+
+  <h2>1.3 Por que o cliente contrata — e o que ele cede</h2>
+  <div class="grid2">
+    <div class="callout ink" style="margin:0"><div class="t">O que se ganha</div>
+      <ul style="margin:0">
+        <li>Proteção do principal (put comprada) sem desembolso.</li>
+        <li>Participação maior na alta (calls compradas, proporção &gt; 1).</li>
+        <li>Retorno prefixado se a ação não cair muito (Forward Knock Out).</li>
+        <li>Resultado conhecido de antemão em cada cenário (quadro de rentabilidade).</li>
+      </ul></div>
+    <div class="callout warn" style="margin:0"><div class="t">O que se cede</div>
+      <ul style="margin:0">
+        <li>Teto de ganho (call vendida) — às vezes só se a barreira for tocada.</li>
+        <li>Proteção que some se a barreira de baixa for tocada.</li>
+        <li>Custo de oportunidade: muitas estruturas rendem menos que o CDI em boa parte dos cenários.</li>
+        <li>Liquidez: a saída antes do vencimento depende da mesa e tem spread.</li>
+      </ul></div>
+  </div>
+
+  <h2>1.4 Como ler o gráfico de resultado (payoff)</h2>
+  <p>No eixo horizontal, a variação da ação entre a contratação e o vencimento; no vertical, o retorno da estrutura. Estruturas com barreira têm <b>dois ramos</b>: um para quando a barreira <b>não</b> foi tocada e outro para quando <b>foi</b>. Como a barreira depende do <b>caminho</b> (não só do preço final), duas operações que terminam no mesmo preço podem ter resultados diferentes — e é por isso que o simulador precisa de caminhos de preço, não apenas de preços finais.</p>
+  <div class="legend"><span><i style="border-color:#2a78d6"></i>barreira não tocada</span><span><i style="border-color:#eb6834"></i>barreira tocada</span><span><i style="border-color:#7d8f95;border-top-style:dashed"></i>só a ação</span><span><i style="border-color:#7d8f95;border-top-style:dotted"></i>strikes</span><span><i style="border-color:#eb6834;border-top-style:dashed"></i>barreira</span></div>
+
+  <h2>1.5 Glossário rápido</h2>
+  <table class="glossary">
+    <tbody>
+      <tr><td>S<sub>0</sub>, S<sub>T</sub></td><td>Preço da ação na contratação e na apuração. O simulador normaliza S<sub>0</sub> = 1 (100%).</td></tr>
+      <tr><td>Strike (K)</td><td>Preço de exercício da opção, em % de S<sub>0</sub>.</td></tr>
+      <tr><td>Barreira (B)</td><td>Nível que, se tocado em qualquer momento até a apuração, liga (In) ou desliga (Out) a opção.</td></tr>
+      <tr><td>Proporção</td><td>Nº de opções por ação (ex.: 2 calls vendidas no Booster; 0,5 call na Proteção Total).</td></tr>
+      <tr><td>Custo zero</td><td>Prêmios comprados = prêmios vendidos; nada é desembolsado além da ação.</td></tr>
+      <tr><td>Volatilidade (vol)</td><td>Desvio-padrão anualizado dos retornos diários. Mede o tamanho típico das oscilações — e manda na chance de tocar barreiras.</td></tr>
+      <tr><td>CDI</td><td>Régua do custo de oportunidade. O simulador usa o CDI efetivo de hoje como referência (editável).</td></tr>
+      <tr><td>Marcação a modelo</td><td>Valor estimado da estrutura antes do vencimento (Black-Scholes e fórmulas de barreira), usado na saída antecipada.</td></tr>
+      <tr><td>Pregões</td><td>Dias úteis da B3: 3 meses ≈ 63, 6 meses ≈ 126, 12 meses ≈ 252.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- =============================== 2 =============================== -->
+<section>
+  <h1 class="sec" id="s2"><span class="n">2</span> Tipos de estrutura e como cada uma funciona</h1>
+  <p class="lead">O simulador traz nove estruturas prontas (“presets”). Elas só preenchem a tabela de pernas: qualquer uma pode ser editada livremente, e é possível montar uma estrutura do zero ou importar uma lâmina em JSON.</p>
+  <table>
+    <thead><tr><th>Estrutura</th><th>Visão de mercado</th><th>Na queda</th><th>Na alta</th><th>Barreira</th></tr></thead>
+    <tbody>
+      <tr><td><b>Booster</b></td><td>Alta moderada</td><td>perde 1:1</td><td>2× a alta até o teto</td><td>—</td></tr>
+      <tr><td><b>Collar</b></td><td>Proteção com teto</td><td>protegido</td><td>1:1 até o teto</td><td>—</td></tr>
+      <tr><td><b>Collar Knock In</b></td><td>Proteção, alta livre até a barreira</td><td>protegido</td><td>1:1; teto só se tocar B</td><td>alta, In</td></tr>
+      <tr><td><b>Forward Knock Out</b></td><td>Retorno prefixado</td><td>fixo, salvo se tocar B</td><td>fixo</td><td>baixa, Out</td></tr>
+      <tr><td><b>Trava de alta</b></td><td>Alta, com prêmio limitado</td><td>perde o prêmio</td><td>ganho limitado</td><td>—</td></tr>
+      <tr><td><b>Trava de baixa</b></td><td>Queda, com prêmio limitado</td><td>ganho limitado</td><td>perde o prêmio</td><td>—</td></tr>
+      <tr><td><b>Straddle</b></td><td>Movimento forte (qualquer lado)</td><td>ganha</td><td>ganha</td><td>—</td></tr>
+      <tr><td><b>Strangle</b></td><td>Movimento muito forte</td><td>ganha abaixo de Kp</td><td>ganha acima de Kc</td><td>—</td></tr>
+      <tr><td><b>Proteção Total</b></td><td>Proteção + ganho mínimo + alta turbinada</td><td>ganho mínimo</td><td>alta + 50%</td><td>alta, In/Out</td></tr>
+    </tbody>
+  </table>
+  <p class="small muted">Gráficos a seguir: resultado no vencimento em % do valor inicial da ação, gerados pelo próprio motor do simulador com os parâmetros padrão de cada preset. Nas estruturas só com opções, o resultado já desconta um prêmio ilustrativo (Black-Scholes, vol 35%, CDI 13,65% a.a., 3 meses).</p>
+  <div class="legend"><span><i style="border-color:#2a78d6"></i>barreira não tocada (ou estrutura sem barreira)</span><span><i style="border-color:#eb6834"></i>barreira tocada</span><span><i style="border-color:#7d8f95;border-top-style:dashed"></i>só a ação</span></div>
+
+  <div class="preset">
+    <div class="chart">{{SVG:booster}}<div class="cap">K1 = 100% · K2 = 112,5% (2 calls vendidas)</div></div>
+    <div><h3>Booster</h3><span class="tag">ação + calls</span><span class="tag">sem barreira</span>
+      <div class="legs">Ação comprada · 1 call comprada K1 = 100% · 2 calls vendidas K2 = 112,5%</div>
+      <dl><dt>Como funciona</dt><dd>Entre 100% e 112,5% o investidor ganha <b>2× a alta</b> (a ação + a call comprada). A partir de +12,5% as duas calls vendidas travam o resultado em <b>+25%</b>. Na queda, não há proteção: acompanha a ação 1:1.</dd>
+      <dt>Quando faz sentido</dt><dd>Visão de alta moderada no prazo, com aceitação do risco de queda da ação.</dd>
+      <dt>Atenção</dt><dd>Alta forte rende menos que a ação; queda é integral.</dd>
+      <dt>Fórmula</dt><dd><code>Valor = S + max(S − K1, 0) − 2·max(S − K2, 0)</code></dd></dl></div>
+  </div>
+  <div class="preset">
+    <div class="chart">{{SVG:collar}}<div class="cap">Kp = 100% · Kc = 115%</div></div>
+    <div><h3>Collar</h3><span class="tag">ação + put + call</span><span class="tag">sem barreira</span>
+      <div class="legs">Ação comprada · put comprada Kp = 100% · call vendida Kc = 115%</div>
+      <dl><dt>Como funciona</dt><dd>A put garante o preço inicial (retorno mínimo de 0%); a call vendida financia a put e limita o ganho a <b>+15%</b>. Entre 100% e 115% acompanha a ação.</dd>
+      <dt>Quando faz sentido</dt><dd>Proteger uma posição em ação sem desembolso, aceitando um teto.</dd>
+      <dt>Atenção</dt><dd>Retorno de 0% na queda perde para o CDI; o teto corta altas fortes.</dd>
+      <dt>Fórmula</dt><dd><code>Valor = min(max(S, Kp), Kc)</code></dd></dl></div>
+  </div>
+  <div class="preset">
+    <div class="chart">{{SVG:collar_ki}}<div class="cap">Kp = 100% · Kc = 113% · barreira de alta B = 143%</div></div>
+    <div><h3>Collar Knock In</h3><span class="tag">ação + put + call KI</span><span class="tag">barreira de alta (In)</span>
+      <div class="legs">Ação comprada · put comprada 100% · call vendida 113% com Knock Up and In em 143%</div>
+      <dl><dt>Como funciona</dt><dd>Enquanto a ação <b>nunca</b> tocar 143%, a call vendida não existe: a alta é 1:1 e sem teto (até +43%, logo abaixo da barreira). Se tocar 143% em algum momento, a call passa a existir e o ganho fica limitado a <b>+13%</b>. Na queda, proteção da put (mínimo de 0%).</dd>
+      <dt>Quando faz sentido</dt><dd>Proteção do principal mantendo a alta “normal” — a estrutura típica de 3 meses (o simulador abre com 100/106/112).</dd>
+      <dt>Atenção</dt><dd>Quanto maior a vol, maior a chance de tocar a barreira e cair no teto. É o principal número a olhar: <b>P(barreira)</b>.</dd>
+      <dt>Fórmula</dt><dd><code>Valor = S + max(Kp − S, 0) − 1{tocou B}·max(S − Kc, 0)</code></dd></dl></div>
+  </div>
+  <div class="preset">
+    <div class="chart">{{SVG:fko}}<div class="cap">K = 110% · barreira de baixa B = 70% (put e call Knock Out)</div></div>
+    <div><h3>Forward Knock Out (FKO)</h3><span class="tag">ação + put + call KO</span><span class="tag">barreira de baixa (Out)</span>
+      <div class="legs">Ação comprada · put comprada 110% e call vendida 110%, ambas com Knock Down and Out em 70%</div>
+      <dl><dt>Como funciona</dt><dd>Put comprada + call vendida no mesmo strike equivalem a vender a ação a termo por 110%: se a ação <b>nunca</b> cair a 70%, o retorno é <b>fixo em +10%</b>, suba ou caia. Se tocar 70%, as duas opções deixam de existir e o investidor fica só com a ação (sem proteção).</dd>
+      <dt>Quando faz sentido</dt><dd>Busca de retorno prefixado, com visão de que a ação não cai 30% no prazo.</dd>
+      <dt>Atenção</dt><dd>O risco está concentrado em quedas fortes: P(barreira) e o pior retorno mostram o tamanho dele.</dd>
+      <dt>Fórmula</dt><dd><code>Sem toque: Valor = K (fixo) · com toque: Valor = S</code></dd></dl></div>
+  </div>
+  <div class="preset">
+    <div class="chart">{{SVG:trava_alta}}<div class="cap">K1 = 100% · K2 = 120% · prêmio ilustrativo {{PREMIO:trava_alta}}</div></div>
+    <div><h3>Trava de alta (call spread)</h3><span class="tag">só opções</span><span class="tag">sem barreira</span>
+      <div class="legs">Call comprada 100% · call vendida 120%</div>
+      <dl><dt>Como funciona</dt><dd>Paga-se um prêmio para ganhar a alta entre 100% e 120%. Abaixo de 100% perde-se o prêmio; acima de 120% o ganho para de crescer.</dd>
+      <dt>Quando faz sentido</dt><dd>Visão de alta com perda máxima conhecida (o prêmio).</dd>
+      <dt>Atenção</dt><dd>Sem ação na estrutura, o retorno é medido sobre o prêmio: varia de −100% a várias vezes o capital. Informe o custo (ou use o modo Teórico).</dd>
+      <dt>Fórmula</dt><dd><code>Valor = max(S − K1, 0) − max(S − K2, 0); retorno = Valor/c − 1</code></dd></dl></div>
+  </div>
+  <div class="preset">
+    <div class="chart">{{SVG:trava_baixa}}<div class="cap">K1 = 100% · K2 = 80% · prêmio ilustrativo {{PREMIO:trava_baixa}}</div></div>
+    <div><h3>Trava de baixa (put spread)</h3><span class="tag">só opções</span><span class="tag">sem barreira</span>
+      <div class="legs">Put comprada 100% · put vendida 80%</div>
+      <dl><dt>Como funciona</dt><dd>Espelho da trava de alta: ganha com a queda entre 100% e 80%; acima de 100% perde o prêmio.</dd>
+      <dt>Quando faz sentido</dt><dd>Visão de queda (ou hedge de carteira) com custo limitado.</dd>
+      <dt>Fórmula</dt><dd><code>Valor = max(K1 − S, 0) − max(K2 − S, 0)</code></dd></dl></div>
+  </div>
+  <div class="preset">
+    <div class="chart">{{SVG:straddle}}<div class="cap">K = 100% · prêmio ilustrativo {{PREMIO:straddle}}</div></div>
+    <div><h3>Straddle</h3><span class="tag">só opções</span><span class="tag">compra de volatilidade</span>
+      <div class="legs">Call comprada 100% · put comprada 100%</div>
+      <dl><dt>Como funciona</dt><dd>Ganha com movimentos fortes para qualquer lado; perde o prêmio inteiro se a ação terminar exatamente no strike. Pontos de equilíbrio: 100% ± prêmio.</dd>
+      <dt>Quando faz sentido</dt><dd>Evento binário (resultado, decisão regulatória) com direção incerta.</dd>
+      <dt>Fórmula</dt><dd><code>Valor = |S − K|</code></dd></dl></div>
+  </div>
+  <div class="preset">
+    <div class="chart">{{SVG:strangle}}<div class="cap">Kp = 95% · Kc = 105% · prêmio ilustrativo {{PREMIO:strangle}}</div></div>
+    <div><h3>Strangle</h3><span class="tag">só opções</span><span class="tag">compra de volatilidade</span>
+      <div class="legs">Put comprada 95% · call comprada 105%</div>
+      <dl><dt>Como funciona</dt><dd>Como o straddle, mas mais barato: só ganha se a ação sair da faixa 95%–105% com folga para pagar o prêmio.</dd>
+      <dt>Fórmula</dt><dd><code>Valor = max(Kp − S, 0) + max(S − Kc, 0)</code></dd></dl></div>
+  </div>
+  <div class="preset">
+    <div class="chart">{{SVG:protecao_total}}<div class="cap">K = 104,1% · B = 138,1% · lâmina BBDC4 de 19/11/2025 (custo zero)</div></div>
+    <div><h3>Proteção Total (lâmina BBDC4)</h3><span class="tag">ação + put + calls KI/KO</span><span class="tag">barreira de alta</span>
+      <div class="legs">Ação · put comprada 104,1% · call vendida 104,1% Knock Up and In 138,1% · 0,5 call comprada 100% Knock Up and Out 138,1%</div>
+      <dl><dt>Como funciona</dt><dd>Se a ação <b>nunca</b> tocar 138,1%: na queda (ou até 104,1%) o retorno mínimo é <b>+4,10%</b>; na alta, recebe a alta da ação <b>mais 50% da alta</b> acima de 100% (ex.: +28% → +42%), até cerca de +57% logo abaixo da barreira. Se tocar 138,1% em qualquer momento, o retorno fica <b>fixo em +4,10%</b>.</dd>
+      <dt>Quando faz sentido</dt><dd>Proteção com ganho mínimo e participação turbinada em altas moderadas, em 12 meses.</dd>
+      <dt>Atenção</dt><dd>+4,10% em um ano fica bem abaixo do CDI: o “custo” está em P(&gt; CDI), não em P(lucro).</dd>
+      <dt>Fórmula</dt><dd><code>Sem toque: S + max(K − S, 0) + 0,5·max(S − 1, 0) · com toque: K</code></dd></dl></div>
+  </div>
+</section>
+
+<!-- =============================== 3 =============================== -->
+<section>
+  <h1 class="sec" id="s3"><span class="n">3</span> Como o simulador funciona</h1>
+  <p class="lead">O simulador aplica a estrutura a milhares de caminhos de preço da ação — reais (backtest histórico) e simulados (Monte Carlo) — e conta em quantos deles a operação deu lucro, superou o CDI ou acionou a barreira. Também marca a estrutura dia a dia para simular a saída antecipada e aplica a estrutura ao caminho realizado de uma operação real (ex-post).</p>
+
+  <svg viewBox="0 0 700 250" style="width:100%;margin:2mm 0 4mm" font-family="Inter, Segoe UI, sans-serif">
+    <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7d8f95"/></marker></defs>
+    <rect x="4" y="20" width="150" height="210" rx="10" fill="#eef6d6" stroke="#a8cf38"/>
+    <text x="79" y="44" text-anchor="middle" font-size="13" font-weight="700" fill="#0e2a33">Entradas</text>
+    <g font-size="11" fill="#1c3f4a"><text x="18" y="70">• ação e histórico</text><text x="18" y="92">• estrutura (pernas)</text><text x="18" y="114">• prazo (3/6/9/12m)</text><text x="18" y="136">• custo das opções</text><text x="18" y="158">• CDI de hoje</text><text x="18" y="180">• premissas do MC</text><text x="18" y="202">• regra de saída</text></g>
+    <g>
+      <rect x="200" y="20" width="210" height="62" rx="10" fill="#fff" stroke="#2a78d6"/>
+      <text x="305" y="45" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0e2a33">Backtest histórico</text>
+      <text x="305" y="64" text-anchor="middle" font-size="10" fill="#4b5f66">janelas reais · CDI de hoje · IC 95%</text>
+      <rect x="200" y="94" width="210" height="62" rx="10" fill="#fff" stroke="#eb6834"/>
+      <text x="305" y="119" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0e2a33">Monte Carlo FHS-GARCH</text>
+      <text x="305" y="138" text-anchor="middle" font-size="10" fill="#4b5f66">vol de hoje · choques reais · cenários</text>
+      <rect x="200" y="168" width="210" height="62" rx="10" fill="#fff" stroke="#1baf7a"/>
+      <text x="305" y="193" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0e2a33">Ex-post</text>
+      <text x="305" y="212" text-anchor="middle" font-size="10" fill="#4b5f66">caminho realizado de uma operação</text>
+    </g>
+    <g stroke="#7d8f95" stroke-width="1.6" fill="none" marker-end="url(#ar)"><path d="M156,125 C178,125 178,51 197,51"/><path d="M156,125 L197,125"/><path d="M156,125 C178,125 178,199 197,199"/>
+      <path d="M412,51 C440,51 440,90 462,90"/><path d="M412,125 L462,125"/><path d="M412,199 C440,199 440,160 462,160"/></g>
+    <rect x="465" y="20" width="230" height="210" rx="10" fill="#0e2a33"/>
+    <text x="580" y="44" text-anchor="middle" font-size="13" font-weight="700" fill="#a8cf38">Resultados</text>
+    <g font-size="11" fill="#e3eef0"><text x="480" y="70">• P(lucro) · P(&gt; CDI de hoje)</text><text x="480" y="92">• P(barreira) · P(perda)</text><text x="480" y="114">• distribuição, mediana, CVaR</text><text x="480" y="136">• faixas: IC 95% e cenários</text><text x="480" y="158">• saída antecipada (150% CDI)</text><text x="480" y="180">• painel de volatilidade</text><text x="480" y="202">• teste de calibração</text></g>
+  </svg>
+
+  <h2>3.1 Normalização e retorno</h2>
+  <p>Todos os níveis são relativos ao preço da contratação: S<sub>0</sub> = 1, strikes e barreiras em %. A mesma estrutura pode então ser aplicada em qualquer data e em qualquer caminho. O valor final é a soma das pernas no vencimento (respeitando as barreiras tocadas no caminho), e o retorno sobre o capital é:</p>
+  <div class="formula">com ação:      retorno = valor final / (1 + c) − 1 − custos adicionais
+só opções:    retorno = valor final / c − 1 − custos adicionais
+              (c = custo líquido das opções, em % de S0)
+CDI no prazo: (1 + CDI de hoje)^(N/252) − 1                               (N = prazo em pregões)</div>
+  <p>Os retornos são <b>brutos de IR</b>. Exemplo: Collar Knock In 100/106/112 sem custo, ação termina em +10% sem ter tocado 112% → valor final 1,10 → retorno +10%; se tivesse tocado 112% em algum dia → valor final 1,06 → +6%.</p>
+
+  <h2>3.2 Backtest por janelas históricas (a base empírica)</h2>
+  <p>Para cada pregão <i>t</i> do histórico com N pregões à frente, o caminho da janela é P[t+1 … t+N] / P[t]. A estrutura, com os mesmos parâmetros em %, é aplicada em todas as janelas — em BBDC4 desde 2010, são <b>4.117 janelas de 63 pregões</b>. A fração de janelas com lucro estima a chance de lucro “se eu tivesse contratado num dia qualquer do passado”.</p>
+  <ul>
+    <li><b>Ajuste ao CDI de hoje (padrão).</b> Em 2017–2021 o CDI chegou a 2% a.a.; hoje está em 13,65%. Para responder “e se eu contratasse <b>agora</b>?”, cada caminho é re-ancorado nos juros de hoje, preservando o excesso de retorno da ação sobre o CDI da época:
+      <div class="formula">caminho ajustado[t, k] = caminho[t, k] × (1 + CDI de hoje)^(k/252)
+                         ÷ (CDI acumulado de t a t+k na época)</div>
+      Sem o ajuste, estruturas com piso ou cupom fixo ficam infladas em épocas de juro baixo (Proteção Total 12m em BBDC4: P(&gt; CDI) de 35% com o CDI da época, 23% com o de hoje).</li>
+    <li><b>Amostra efetiva.</b> Janelas vizinhas compartilham quase todos os dias: 4.117 janelas de 3 meses equivalem a só ≈ 66 períodos independentes (⌈n/N⌉). Por isso cada probabilidade vem com um <b>intervalo de confiança de 95%</b> (seção 4.2).</li>
+  </ul>
+
+  <h2>3.3 Monte Carlo: o “agora” com a volatilidade de hoje</h2>
+  <p>O backtest diz como a estrutura teria se saído no passado, com a volatilidade média do passado. Mas a chance de tocar uma barreira depende muito da volatilidade <b>dos próximos meses</b> — e a volatilidade tem memória: dias agitados vêm em sequência. O Monte Carlo padrão do simulador, o <b>FHS-GARCH</b>, combina as duas coisas:</p>
+  <ol>
+    <li>um modelo <b>GJR-GARCH</b> estima a volatilidade de cada dia do histórico e a de <b>hoje</b>;</li>
+    <li>cada retorno histórico é dividido pela vol do seu dia, gerando um “choque padronizado” — o susto real da ação sem o nível de vol da época;</li>
+    <li>a simulação parte da vol de hoje e, a cada dia, sorteia um choque real, aplica-o à vol corrente e atualiza a vol: um dia de queda forte aumenta a vol dos dias seguintes; dias calmos a trazem de volta à média de longo prazo, no ritmo estimado (meia-vida).</li>
+  </ol>
+  <p>São 10.000 caminhos por padrão, com o retorno esperado da ação igual ao <b>CDI</b> (visão neutra; seção 4.8). Alternativas: <b>bootstrap em blocos</b> (reamostra blocos de dias reais, vol média do período) e <b>GBM</b> (log-normal com vol constante). Como o erro de sorteio é desprezível com 10.000 caminhos, a incerteza que importa é a de <b>premissa</b>: o simulador roda uma grade de 9 cenários — retorno esperado {zero, CDI, CDI + 5 p.p.} × vol {0,8; 1,0; 1,2} × a vol prevista — e mostra a faixa mínimo–máximo de cada indicador.</p>
+
+  <h2>3.4 Custo das opções</h2>
+  <ul>
+    <li><b>Informado</b> (padrão): o custo líquido cotado pela mesa — 0 nas estruturas sem custo.</li>
+    <li><b>Teórico</b>: Black-Scholes para opções sem barreira e Monte Carlo neutro ao risco (50.000 caminhos diários, variáveis antitéticas, erro padrão informado) para as com barreira, com a vol histórica de 252 pregões e o CDI de hoje. É uma referência: a mesa usa vol implícita, skew e margem próprios.</li>
+    <li><b>Solver de custo zero</b>: encontra o strike, a barreira ou a proporção de uma perna que zera o custo teórico (método de Brent).</li>
+  </ul>
+
+  <h2>3.5 Saída antecipada</h2>
+  <p>Na prática da mesa, quando a estrutura rende <b>150% do CDI</b> do período, orienta-se o investidor a pedir a desmontagem; com o OK dele, ela acontece no pregão seguinte, pelo valor daquele dia. O simulador reproduz a regra:</p>
+  <div class="formula">retorno de saída no dia k = valor da estrutura(k) / (1 + c) − 1 − spread de saída (1%)
+gatilho no dia k         = 1,5 × CDI acumulado de 0 a k        →  desmonta em k + 1</div>
+  <p>O valor de cada dia é uma <b>marcação a modelo</b>: Black-Scholes para as opções sem barreira; fórmula fechada de Reiner-Rubinstein para as barreiras ainda não tocadas (com a correção de Broadie-Glasserman-Kou para monitoramento no fechamento); knock-in tocado vira opção comum, knock-out tocado vale zero. A vol da marcação é a <b>vol prevista pelo GARCH para o prazo restante + 3 pontos</b>, e a marcação é <b>calibrada ao preço pago</b>: a diferença entre o preço da lâmina e o modelo no dia 0 é somada e amortizada até o vencimento (supõe que a lâmina estava a preço justo na contratação).</p>
+
+  <h2>3.6 Ex-post</h2>
+  <p>Aplica a estrutura ao caminho <b>realmente observado</b> entre a contratação e a apuração. Se o vencimento ainda não chegou, mostra a marcação <b>intrínseca</b> — o payoff como se a apuração fosse hoje, com o status das barreiras até agora —, que não é o valor de mercado. Junto, mostra o retorno de saída estimado dia a dia contra o gatilho de 150% do CDI.</p>
+
+  <h2>3.7 Indicadores</h2>
+  <table>
+    <thead><tr><th>Indicador</th><th>O que mede</th><th>Faixa mostrada</th></tr></thead>
+    <tbody>
+      <tr><td><b>P(lucro &gt; 0)</b></td><td>Fração dos cenários com retorno positivo</td><td rowspan="3">Histórico: IC 95% (block bootstrap). Monte Carlo: mínimo–máximo dos 9 cenários</td></tr>
+      <tr><td><b>P(retorno &gt; CDI de hoje)</b></td><td>Fração que supera o CDI de hoje composto no prazo</td></tr>
+      <tr><td><b>P(barreira acionada)</b></td><td>Fração em que alguma barreira foi tocada</td></tr>
+      <tr><td>P(perda)</td><td>Fração com retorno negativo</td><td>IC 95% no histórico</td></tr>
+      <tr><td>Retorno mediano / médio</td><td>Centro da distribuição; resultado em R$ sobre o valor investido</td><td>—</td></tr>
+      <tr><td>Percentil 5 e <b>CVaR 5%</b></td><td>Cauda ruim: o 5º pior percentil e a média dos 5% piores cenários</td><td>—</td></tr>
+      <tr><td>P(&gt; CDI da época)</td><td>Régua secundária: o CDI realmente vigente em cada janela (sem ajuste)</td><td>—</td></tr>
+      <tr><td>Saída antecipada</td><td>P(saída), dia mediano, retorno com saída, % do CDI do período investido</td><td>IC 95% no histórico</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- =============================== 4 =============================== -->
+<section>
+  <h1 class="sec" id="s4"><span class="n">4</span> Métodos estatísticos que balizam o modelo</h1>
+  <p class="lead">Cada número do simulador vem de um método conhecido na literatura de finanças e estatística. Esta seção explica, de forma direta, o que cada um faz, por que foi escolhido e onde aparece na tela.</p>
+
+  <h2>4.1 Janelas móveis sobrepostas e amostra efetiva</h2>
+  <p>Aplicar a estrutura a todas as datas de início possíveis é o método recomendado pela regulação europeia de produtos estruturados (PRIIPs, Reg. Delegado UE 2021/2268) para cenários de desempenho. Ele usa caminhos <b>reais</b> — com caudas gordas, saltos e crises — sem supor nenhuma distribuição. O custo é a sobreposição: em 3 meses, duas janelas que começam com 1 dia de diferença têm 62 dos 63 dias em comum. A “amostra efetiva” ⌈n/N⌉ dá a ordem de grandeza de períodos independentes: ≈ 66 em 3 meses, ≈ 32 em 6 meses, ≈ 16 em 12 meses.</p>
+
+  <h2>4.2 Intervalo de confiança por <i>moving block bootstrap</i></h2>
+  <p>Como as janelas são dependentes, a fórmula usual de erro padrão (√(p(1−p)/n)) subestimaria muito a incerteza. O <b>moving block bootstrap</b> (Künsch, 1989) resolve: sorteia blocos de N janelas consecutivas — o tamanho da sobreposição — até completar a série, recalcula a probabilidade, repete 1.000 vezes e toma os percentis 2,5% e 97,5%.</p>
+  <div class="formula">para b = 1 … 1.000:   série* = blocos sorteados de N indicadores consecutivos (0/1)
+                      p*_b  = média(série*)
+IC 95% = [percentil 2,5% ; percentil 97,5%] dos p*_b
+         (seed fixa: o mesmo IC no site e no Python)</div>
+  <p>Margem típica: ±8 p.p. em 3 meses, ±10 p.p. em 6 meses, ±12–15 p.p. em 12 meses. Ex.: Collar Knock In 3m em BBDC4, P(lucro) = 57,8% com IC de 50% a 65%.</p>
+
+  <h2>4.3 Bootstrap em blocos para gerar caminhos</h2>
+  <p>Uma das alternativas do Monte Carlo (Politis e Romano). Sorteia uma posição na série e copia L dias consecutivos (padrão 20) — fechamento, máxima e mínima de cada dia juntos —, encadeando blocos até N dias. Preserva caudas gordas e parte da aglomeração de volatilidade. A média dos retornos é trocada pelo retorno esperado escolhido:</p>
+  <div class="formula">lr* = [ln(1 + μ)/252 − ½·var(lr)] + (lr − média(lr))         ⇒   E[S_T] ≈ (1 + μ)^(N/252)</div>
+
+  <h2>4.4 Movimento browniano geométrico e Black-Scholes</h2>
+  <p>O <b>GBM</b> supõe log-retornos normais com vol constante: ln S<sub>t+1</sub> − ln S<sub>t</sub> = μ<sub>d</sub> + σ·√(1/252)·Z. É a base do modelo de <b>Black-Scholes</b> (1973), usado para precificar as opções sem barreira no modo Teórico e na marcação diária. No Monte Carlo de precificação, usam-se <b>variáveis antitéticas</b> (cada sorteio Z é usado também como −Z), que reduzem o erro de sorteio sem custo adicional. A precificação é feita na medida neutra ao risco (retorno esperado = taxa de juros), diferente das probabilidades, que usam o retorno esperado escolhido pelo usuário.</p>
+
+  <h2>4.5 GARCH(1,1) e GJR-GARCH: a volatilidade de hoje</h2>
+  <p>O <b>GARCH</b> (Bollerslev, 1986) descreve a variância de amanhã como uma média ponderada entre a variância de longo prazo, o choque de hoje e a variância de hoje. O <b>GJR-GARCH</b> (Glosten, Jagannathan e Runkle, 1993) acrescenta o “efeito alavancagem”: quedas aumentam a vol mais do que altas do mesmo tamanho.</p>
+  <div class="formula">h(t+1) = ω + (α + γ·1[ε(t) &lt; 0])·ε(t)² + β·h(t)          ε = retorno − média;  GARCH(1,1): γ = 0
+
+persistência  p = α + γ·κ + β              (κ ≈ 0,5: fração média do choque² vinda de quedas)
+vol de longo prazo  = √(252·ω/(1 − p))
+meia-vida  = ln(0,5)/ln(p) pregões
+vol média prevista para N pregões = √(252·[v_L + (h − v_L)·(1 − p^N)/(N·(1 − p))])</div>
+  <p><b>Como é estimado.</b> Por máxima verossimilhança gaussiana (“quase-verossimilhança”: os parâmetros saem consistentes mesmo com resíduos não normais), maximizando −½·Σ[ln h<sub>t</sub> + ε<sub>t</sub>²/h<sub>t</sub>]. O otimizador (Nelder-Mead, com dois pontos de partida e reinícios) é o mesmo no site e no Python e chega ao mesmo ótimo do pacote científico de referência (scipy). O ajuste é refeito na hora para a ação e o período escolhidos.</p>
+  <div class="callout"><div class="t">Leitura do painel (BBDC4, 28/10/2026)</div>
+    α 0,092 · γ 0,000 · β 0,878 → persistência 0,970 e meia-vida de 23 pregões. Depois da queda de 24,5% de 26/10/2026, a vol de hoje está em <b>114,7% a.a.</b>, contra 37,0% de longo prazo; a média prevista para os próximos 63 pregões é <b>82,0%</b> — é essa vol que o Monte Carlo usa. Em BBDC4 o ajuste não encontrou assimetria (γ = 0); em PETR4, sim (γ ≈ 0,04).</div>
+
+  <h2>4.6 FHS — Filtered Historical Simulation</h2>
+  <p>Proposta por Barone-Adesi, Giannopoulos e Vosper (1999), a FHS junta o melhor do GARCH (o nível de vol de hoje e a volta gradual à média) com o melhor do histórico (a distribuição real dos choques, com caudas gordas e assimetria), sem supor normalidade.</p>
+  <div class="formula">z(t) = ε(t)/√h(t)                       choques padronizados (média 0, desvio 1)
+u(t) = ln(máxima/fech.)/√h(t)            d(t) = ln(mínima/fech.)/√h(t)
+
+a cada dia do caminho:  sorteia um dia q do histórico;   e = √h · z(q)
+                        ln S  += ln(1 + μ)/252 − ½·h + e
+                        máxima = ln S + √h·u(q);   mínima = ln S + √h·d(q)
+                        h      ← ω + (α + γ·1[e &lt; 0])·e² + β·h</div>
+  <p>Detalhes: a simulação parte de h = previsão para o próximo pregão; a máxima e a mínima do dia sorteado também são padronizadas e re-escaladas pela vol simulada, o que dá barreiras intradiárias realistas; com α = γ = β = 0 o método vira um bootstrap simples com vol constante (verificado nos testes). Os sorteios usam o mesmo gerador no site e no Python, que produzem exatamente os mesmos caminhos.</p>
+
+  <h2>4.7 Barreiras: fórmula fechada e correção de monitoramento</h2>
+  <p>Para marcar a estrutura em todos os dias de milhares de janelas (necessário na saída antecipada), seria inviável rodar um Monte Carlo por dia. A fórmula fechada de <b>Reiner e Rubinstein</b> (1991) dá o preço de cada uma das oito opções com barreira (call/put × up/down × in/out) supondo monitoramento contínuo; a paridade in + out = vanilla é verificada em todos os casos.</p>
+  <p>As barreiras das lâminas costumam ser observadas no fechamento diário, não continuamente. <b>Broadie, Glasserman e Kou</b> (1997) mostraram que basta deslocar a barreira por um fator para corrigir isso:</p>
+  <div class="formula">fórmula contínua → monitoramento diário:  B' = B · e^(±0,5826·σ·√(1/252))
+                                          (barreira afastada do preço)
+caminhos diários → intradiário (GBM):      barreira aproximada do preço pelo mesmo fator</div>
+
+  <h2>4.8 Retorno esperado: por que o padrão é o CDI</h2>
+  <p>A média histórica de retorno de uma ação é uma estimativa muito ruidosa: seu erro padrão é ≈ σ/√anos (Merton, 1980) — em BBDC4, cerca de ±8 p.p. ao ano, maior que o próprio prêmio de risco. Como a probabilidade de lucro é sensível ao retorno esperado (no Collar KI 3m em BBDC4: −10% a.a. → 41%; 0% → 46%; CDI → 53%; CDI + 5 p.p. → 55%), o simulador usa como padrão a visão <b>neutra</b> — a ação rende, em média, o CDI — e mostra a sensibilidade na grade de cenários. Outras opções: CDI + prêmio, zero, média histórica (com aviso) e personalizado.</p>
+
+  <h2>4.9 Medidas de risco</h2>
+  <p>Além das probabilidades, o simulador mostra a distribuição completa (histograma), os percentis e o <b>CVaR 5%</b> (expected shortfall): a média dos 5% piores resultados. Diferente do percentil 5, o CVaR “enxerga” o tamanho das perdas na cauda — importante em estruturas como o Forward Knock Out, em que o risco está concentrado em poucos cenários de queda forte.</p>
+
+  <h2>4.10 Avaliação das previsões: walk-forward, Brier score e confiabilidade</h2>
+  <p>Um modelo de probabilidade só é útil se as probabilidades “acertarem na média”. O teste de calibração do simulador faz um <b>walk-forward</b>: a cada 10 pregões do histórico (depois de 2 anos de dados), estima as probabilidades usando <b>só os dados até aquela data</b> — GARCH reestimado a cada 252 pregões, CDI da data como régua — e confere o que aconteceu de fato nos N pregões seguintes.</p>
+  <div class="formula">Brier = média[(probabilidade prevista − resultado 0/1)²]
+        (menor é melhor; 0,25 = chutar sempre 50%)
+chute fixo (climatologia) = frequência do evento nas janelas já encerradas até a data
+ganho = 1 − Brier do modelo / Brier do chute fixo</div>
+  <p>O <b>diagrama de confiabilidade</b> agrupa as previsões em faixas de 10 p.p. e compara a média prevista com a frequência realizada: pontos sobre a diagonal indicam probabilidades bem calibradas.</p>
+  <table>
+    <thead><tr><th>Collar KI 3m, 362 datas (2012–2026)</th><th class="r">Lucro</th><th class="r">&gt; CDI</th><th class="r">Barreira</th></tr></thead>
+    <tbody>
+      <tr><td>BBDC4 — FHS-GJR (padrão)</td><td class="r">+1,0%</td><td class="r">+2,1%</td><td class="r">+4,1%</td></tr>
+      <tr><td>BBDC4 — bootstrap</td><td class="r">−0,1%</td><td class="r">+0,9%</td><td class="r">+2,2%</td></tr>
+      <tr><td>PETR4 — FHS-GJR</td><td class="r">+2,9%</td><td class="r">+2,2%</td><td class="r">+7,0%</td></tr>
+      <tr><td>VALE3 — FHS-GJR</td><td class="r">+0,9%</td><td class="r">+3,2%</td><td class="r">+7,7%</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Ganho de Brier sobre o chute fixo. Leitura: o FHS-GARCH supera o bootstrap e, por pouco, o chute fixo; o ganho é pequeno para <b>direção</b> e maior para <b>barreira</b> — volatilidade é previsível no curto prazo; direção, quase nada.</p>
+
+  <h2>4.11 Resumo: método → onde aparece</h2>
+  <table>
+    <thead><tr><th>Método</th><th>Onde aparece</th><th>Referência</th></tr></thead>
+    <tbody>
+      <tr><td>Janelas móveis sobrepostas</td><td>Backtest histórico</td><td>PRIIPs (UE 2021/2268)</td></tr>
+      <tr><td>Moving block bootstrap</td><td>IC 95% das probabilidades</td><td>Künsch (1989)</td></tr>
+      <tr><td>Bootstrap em blocos circular</td><td>Monte Carlo (alternativa)</td><td>Politis e Romano (1992)</td></tr>
+      <tr><td>GJR-GARCH por quase-verossimilhança</td><td>Vol de hoje, painel de vol, marcação</td><td>Bollerslev (1986); Glosten et al. (1993)</td></tr>
+      <tr><td>Filtered Historical Simulation</td><td>Monte Carlo (padrão)</td><td>Barone-Adesi et al. (1999)</td></tr>
+      <tr><td>GBM, Black-Scholes, antitéticas</td><td>Custo teórico, GBM, marcação</td><td>Black e Scholes (1973)</td></tr>
+      <tr><td>Fórmula de barreira + correção BGK</td><td>Custo teórico, saída antecipada</td><td>Reiner e Rubinstein (1991); Broadie et al. (1997)</td></tr>
+      <tr><td>Drift = CDI</td><td>Monte Carlo</td><td>Merton (1980)</td></tr>
+      <tr><td>CVaR (expected shortfall)</td><td>Indicadores de risco</td><td>Acerbi e Tasche (2002)</td></tr>
+      <tr><td>Walk-forward, Brier, confiabilidade</td><td>Teste de calibração</td><td>Brier (1950)</td></tr>
+      <tr><td>Método de Brent</td><td>Solver de custo zero</td><td>Brent (1973)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- =============================== 5 =============================== -->
+<section>
+  <h1 class="sec" id="s5"><span class="n">5</span> Passo a passo no simulador</h1>
+  <p class="lead">O simulador roda no navegador, sem instalação: <b>viniciusmarquesserpeloni-commits.github.io/estruturadas-sim</b>. Os dados de mais de 90 ações da B3 e do CDI são atualizados todo dia útil após o fechamento. As telas a seguir usam o exemplo que o site abre por padrão — Collar Knock In 100/106/112 de 3 meses em BBDC4.</p>
+
+  <div class="stepblock"><div class="step"><div class="num">1</div><h2>Conheça a tela</h2></div>
+  <p>No topo, as cinco abas: <b>Estrutura</b> (a montagem), <b>Backtest histórico</b>, <b>Monte Carlo</b>, <b>Ex-post</b> e <b>Metodologia e fontes</b>. A barra de parâmetros logo abaixo vale para todas as abas — mudou um campo, tudo é recalculado. À direita do cabeçalho, a data dos dados e o botão de imprimir/salvar em PDF. A linha de status abaixo da barra confirma a ação, o período do histórico, o prazo em pregões, a vol histórica e a taxa usada.</p></div>
+  <figure><img src="img/01_tela_inicial.png"><figcaption><b>Figura 1.</b> Cabeçalho, abas e barra de parâmetros. Linha de status: BBDC4 com 4.180 pregões desde 04/01/2010, prazo de 63 pregões, vol de 252 pregões de 39,2% e CDI de hoje de 13,65% a.a.</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">2</div><h2>Escolha a ação</h2></div>
+  <span class="where">Barra de parâmetros · Ação</span>
+  <p>Digite o código ou parte do nome; a lista mostra as ações da base com o início do histórico e a vol de 252 pregões. Para uma ação fora da lista, envie um CSV com as colunas Date e Close (e, se tiver, High e Low) em “Mais opções”.</p></div>
+  <figure><img src="img/02_acao.png"><figcaption><b>Figura 2.</b> Busca da ação: ao digitar “BB”, aparecem BBAS3, BBDC3, BBDC4, BBSE3…</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">3</div><h2>Escolha a estrutura e confira a composição</h2></div>
+  <span class="where">Barra de parâmetros · Estrutura → aba Estrutura</span>
+  <p>No campo <b>Estrutura</b>, escolha um preset, “Customizada” ou “Importar lâmina (JSON)”. A aba Estrutura mostra a tabela de pernas no formato da lâmina — edite tipo, posição, strike, barreira e proporção diretamente, ou adicione/remova pernas. Logo abaixo, os indicadores do perfil no vencimento: retorno máximo, pior retorno e se há perda ou ganho ilimitados.</p></div>
+  <figure><img src="img/05_composicao.png"><figcaption><b>Figura 3.</b> “Composição da estratégia”: ação comprada, put comprada 100% e call vendida 106% com Knock Up and In 112%. Os indicadores mostram retorno máximo de 12% (logo abaixo da barreira) e pior retorno de 0%.</figcaption></figure>
+
+  <div class="step"><div class="num">4</div><h2>Defina o prazo</h2></div>
+  <span class="where">Barra de parâmetros · Prazo</span>
+  <div class="grid2" style="align-items:center">
+    <figure style="margin:0"><img src="img/03_prazo.png"><figcaption><b>Figura 4.</b> Prazo em meses com atalhos de 3, 6, 9 e 12 meses.</figcaption></figure>
+    <p style="margin:0">Três formas: <b>Meses</b> (com atalhos 3m, 6m, 9m e 12m; cada mês = 21 pregões), <b>Dias úteis</b> ou <b>Datas</b> de contratação e vencimento — nesse caso o simulador conta os pregões até a apuração em D−1, usando o calendário da B3.</p>
+  </div>
+
+  <div class="stepblock"><div class="step"><div class="num">5</div><h2>Informe o valor investido e o custo</h2></div>
+  <span class="where">Barra de parâmetros · Valor investido e Custo das opções</span>
+  <p>O valor investido só converte os retornos em reais. O custo das opções vem da lâmina (<b>Informado</b>; 0 nas estruturas sem custo) ou do cálculo do próprio simulador (<b>Teórico</b>). O cartão “Custo teórico das opções”, na aba Estrutura, mostra sempre o preço de cada perna, para comparar com o da mesa.</p></div>
+  <figure class="w70"><img src="img/04_valor_custo.png"><figcaption><b>Figura 5.</b> Valor investido de R$ 30.000 e custo informado de 0,00% (estrutura sem custo).</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">6</div><h2>Leia o payoff, o resumo e o quadro de rentabilidade</h2></div>
+  <span class="where">Aba Estrutura</span>
+  <p>O gráfico mostra o retorno no vencimento para cada variação da ação, com os dois ramos da barreira; o resumo traduz a estrutura em linguagem simples. O <b>quadro de rentabilidade</b> repete o formato das lâminas — edite as variações (separadas por ponto e vírgula) para os cenários da conversa. “—” indica cenário impossível (terminar acima de uma barreira de alta sem tê-la tocado).</p></div>
+  <figure><img src="img/06_payoff_resumo.png"><figcaption><b>Figura 6.</b> Payoff e resumo do Collar Knock In 100/106/112: sem tocar 112%, alta 1:1; tocando, teto de 6%; na queda, retorno mínimo de 0%.</figcaption></figure>
+  <figure><img src="img/07_quadro_teorico.png"><figcaption><b>Figura 7.</b> Quadro de rentabilidade e custo teórico. Com vol de 39,2% e CDI de 13,65%, a put vale 6,21% e a call KI vendida 6,60%: custo líquido teórico de −0,39%, ou seja, a estrutura “paga” cerca de 0,39% do valor inicial a quem a monta.</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">7</div><h2>(Opcional) Resolva o custo zero e exporte a lâmina</h2></div>
+  <span class="where">Aba Estrutura · Solver de custo zero e Exportar JSON</span>
+  <p>Marque a perna (ou as pernas) e o parâmetro a resolver, a faixa de busca e o custo alvo, e clique em <b>Resolver</b>. Com “Aplicar à tabela”, o valor encontrado vai para a estrutura. O botão <b>Exportar JSON</b> salva a lâmina para importar depois (no simulador ou no app Python).</p></div>
+  <figure><img src="img/08_solver.png"><figcaption><b>Figura 8.</b> Strike da call que zera o custo teórico: 107,07% (contra 106% da estrutura). A diferença é a remuneração embutida e as diferenças de vol e taxa em relação à mesa.</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">8</div><h2>Ajuste as premissas em “Mais opções”</h2></div>
+  <span class="where">Barra de parâmetros · Mais opções</span>
+  <p>Os padrões já respondem à pergunta “e se eu contratar agora?”. Vale conhecer o que cada grupo faz:</p></div>
+  <table>
+    <thead><tr><th>Grupo</th><th>Opção</th><th>Padrão</th><th>Para que serve</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="3">Histórico</td><td>Desde</td><td>01/01/2010</td><td>Início do histórico usado em tudo</td></tr>
+      <tr><td>Preço</td><td>ajustado</td><td>Ajustado por proventos ou bruto</td></tr>
+      <tr><td>Ajustar ao CDI de hoje</td><td>sim</td><td>Re-ancora as janelas no CDI de hoje (seção 3.2)</td></tr>
+      <tr><td rowspan="2">Barreiras e custos</td><td>Monitoramento</td><td>fechamento</td><td>Fechamento diário ou intradiário (máxima/mínima)</td></tr>
+      <tr><td>Custos adicionais</td><td>0%</td><td>Corretagem, taxas, spread de entrada</td></tr>
+      <tr><td rowspan="2">Precificação</td><td>Volatilidade</td><td>vol 252d</td><td>Vol do modo Teórico (use a implícita da mesa, se souber)</td></tr>
+      <tr><td>CDI de referência</td><td>CDI de hoje</td><td>Régua de P(&gt; CDI) e taxa; use o DI futuro do vencimento, se souber</td></tr>
+      <tr><td rowspan="4">Monte Carlo</td><td>Método</td><td>FHS-GARCH</td><td>FHS-GARCH, bootstrap em blocos ou GBM</td></tr>
+      <tr><td>Modelo de vol</td><td>GJR</td><td>GJR-GARCH (assimétrico) ou GARCH(1,1)</td></tr>
+      <tr><td>Retorno esperado</td><td>CDI</td><td>CDI, CDI + prêmio, zero, histórico ou personalizado</td></tr>
+      <tr><td>Caminhos / seed</td><td>10.000 / 42</td><td>Precisão e reprodutibilidade</td></tr>
+      <tr><td rowspan="3">Saída antecipada</td><td>Gatilho / spread</td><td>150% / 1%</td><td>Regra de desmontagem e desconto na saída</td></tr>
+      <tr><td>Pregões até desmontar</td><td>1</td><td>Tempo até o OK do investidor</td></tr>
+      <tr><td>Vol da marcação</td><td>GARCH + 3 pts</td><td>GARCH do prazo restante, móvel 63d ou fixa</td></tr>
+    </tbody>
+  </table>
+  <figure class="w85"><img src="img/10_mais_opcoes.png"><figcaption><b>Figura 9.</b> Painel “Mais opções”. “Restaurar todos os padrões” volta ao estado inicial.</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">9</div><h2>Leia o backtest histórico</h2></div>
+  <span class="where">Aba Backtest histórico</span>
+  <p>Os seis indicadores vêm com o IC 95%, e a nota explica o ajuste ao CDI de hoje e a amostra efetiva. O gráfico de janelas mostra, para cada data de início, o retorno obtido (azul = lucro; vermelho = sem lucro; triângulo = barreira acionada): é o melhor lugar para ver <b>quando</b> a estrutura funcionou e quando não. A distribuição compara histórico e Monte Carlo, e o gráfico de preço destaca qualquer janela (por padrão, a pior).</p></div>
+  <figure><img src="img/11_backtest_kpis.png"><figcaption><b>Figura 10.</b> 4.117 janelas de 63 pregões; amostra efetiva de 66. P(lucro) 57,8% (IC 50%–65%), P(&gt; CDI de hoje) 48,3% (IC 41%–56%), P(barreira) 44,6% (IC 38%–53%), retorno mediano +2,68%.</figcaption></figure>
+  <figure><img src="img/12_backtest_janelas.png"><figcaption><b>Figura 11.</b> Retorno de cada janela pela data de início. Faixas de lucro alternam com faixas sem lucro — sinal de que a direção depende muito do momento.</figcaption></figure>
+  <figure><img src="img/13_backtest_distribuicao.png"><figcaption><b>Figura 12.</b> Distribuição dos retornos (histórico × Monte Carlo) e a tabela completa de métricas, com IC.</figcaption></figure>
+  <figure><img src="img/14_backtest_preco.png"><figcaption><b>Figura 13.</b> Preço da ação com a janela em destaque e os níveis da estrutura em R$. Arraste o controle para escolher outra janela.</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">10</div><h2>Leia o Monte Carlo e o painel de volatilidade</h2></div>
+  <span class="where">Aba Monte Carlo</span>
+  <p>A linha de descrição confirma o método (FHS-GJR), a vol média prevista e o retorno esperado. Os indicadores trazem a faixa entre os 9 cenários. Logo abaixo, o <b>painel de volatilidade</b>: vol de hoje, vol prevista para o prazo (a usada nos caminhos), vol de longo prazo, vol realizada, meia-vida e persistência, com o gráfico da vol condicional e a previsão tracejada.</p></div>
+  <figure><img src="img/15_mc_kpis.png"><figcaption><b>Figura 14.</b> 10.000 caminhos FHS-GJR com vol média prevista de 82,0% a.a.: P(lucro) 47,5% (cenários 42%–52%), P(&gt; CDI) 43,6%, P(barreira) 62,0% (55%–66%).</figcaption></figure>
+  <figure><img src="img/16_mc_vol.png"><figcaption><b>Figura 15.</b> Painel de volatilidade. A queda de 26/10/2026 levou a vol de hoje a 114,7%; o modelo prevê volta gradual aos 37% de longo prazo (meia-vida de 23 pregões).</figcaption></figure>
+  <figure><img src="img/17_mc_cenarios.png"><figcaption><b>Figura 16.</b> Sensibilidade às premissas: retorno esperado (linhas) × vol (colunas: 0,8×, 1,0× e 1,2× a vol prevista). O cenário central está em negrito.</figcaption></figure>
+  <figure><img src="img/18_mc_distribuicao.png"><figcaption><b>Figura 17.</b> Distribuição dos retornos simulados e amostra de 100 caminhos, com strikes e barreira.</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">11</div><h2>Teste a calibração</h2></div>
+  <span class="where">Aba Monte Carlo · Calibração</span>
+  <p>Clique em <b>Testar calibração</b>: em alguns segundos, o simulador refaz as previsões em centenas de datas do passado, só com os dados disponíveis em cada uma, e compara com o que aconteceu. A tabela mostra o Brier do modelo, o do chute fixo e o ganho; o diagrama de confiabilidade mostra se as probabilidades de cada faixa “acertaram na média”.</p></div>
+  <figure><img src="img/19_calibracao.png"><figcaption><b>Figura 18.</b> 362 datas de 2012 a 2026. O modelo supera o chute fixo em 1,0% (lucro), 2,1% (&gt; CDI) e 4,1% (barreira) — ganho real, mas pequeno para direção.</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">12</div><h2>Veja a saída antecipada</h2></div>
+  <span class="where">Abas Backtest histórico e Monte Carlo · Saída antecipada</span>
+  <p>O bloco mostra a chance de a estrutura bater 150% do CDI antes do vencimento, quando isso acontece e o que muda no retorno e no % do CDI do período efetivamente investido — no histórico e no Monte Carlo, lado a lado.</p></div>
+  <figure><img src="img/20_saida_antecipada.png"><figcaption><b>Figura 19.</b> Saída antecipada: 47,7% das janelas históricas (dia mediano 39) e 50,2% dos caminhos simulados (dia mediano 14 — com vol alta, a estrutura se valoriza ou se desvaloriza mais depressa).</figcaption></figure>
+
+  <div class="stepblock"><div class="step"><div class="num">13</div><h2>Acompanhe uma operação real no Ex-post</h2></div>
+  <span class="where">Aba Ex-post</span>
+  <p>Informe as datas de contratação e vencimento (ou use as do prazo). O simulador aplica a estrutura ao caminho realizado: se já venceu, mostra o resultado final; se não, a marcação intrínseca até hoje e o retorno de saída estimado contra o gatilho. Detalhes no Exemplo 2 (seção 6).</p></div>
+
+  <div class="stepblock"><div class="step"><div class="num">14</div><h2>Consulte a metodologia</h2></div>
+  <span class="where">Aba Metodologia e fontes</span>
+  <p>Resume, dentro do próprio site, as fórmulas, as convenções, as limitações e as fontes de dados (Yahoo Finance e Banco Central do Brasil — séries 12 e 432 do SGS).</p></div>
+  <figure class="w70"><img src="img/27_metodologia.png"><figcaption><b>Figura 20.</b> Aba Metodologia e fontes.</figcaption></figure>
+</section>
+
+<!-- =============================== 6 =============================== -->
+<section>
+  <h1 class="sec" id="s6"><span class="n">6</span> Exemplos práticos</h1>
+
+  <h2 id="s6a">Exemplo 1 — Collar Knock In de 3 meses em BBDC4</h2>
+  <p><b>Situação.</b> Um cliente com R$ 30.000 quer participar da alta de BBDC4 nos próximos 3 meses sem arriscar o principal. A mesa oferece um Collar Knock In sem custo: put 100%, call vendida 106% com Knock Up and In 112%. A ação acabou de cair 24,5% num dia (26/10/2026).</p>
+  <div class="kpis">
+    <div><div class="l">P(lucro) — histórico</div><div class="v">57,8%</div><div class="h">IC 50%–65%</div></div>
+    <div><div class="l">P(lucro) — Monte Carlo</div><div class="v">47,5%</div><div class="h">cenários 42%–52%</div></div>
+    <div><div class="l">P(barreira) hist. × MC</div><div class="v">44,6% · 62,0%</div><div class="h">vol média 37% × prevista 82%</div></div>
+    <div><div class="l">P(&gt; CDI de hoje)</div><div class="v">48,3% · 43,6%</div><div class="h">CDI no prazo: 3,25%</div></div>
+  </div>
+  <h3>Como ler</h3>
+  <ol>
+    <li><b>A perda é zero</b> em todos os cenários (a put protege 100%), mas o retorno de 0% na queda perde para o CDI de 3,25% no trimestre. Por isso P(&gt; CDI) fica abaixo de 50% nos dois métodos.</li>
+    <li><b>Histórico × Monte Carlo divergem por causa da vol.</b> O histórico usa a vol média de 2010–2026 (≈ 37%); o Monte Carlo parte da vol de hoje (114,7%) e prevê 82% em média para o trimestre. Com vol alta, a chance de tocar 112% sobe de 45% para 62% — e, tocando, o ganho trava em 6%. Daí P(lucro) menor no Monte Carlo.</li>
+    <li><b>A faixa importa mais que o ponto.</b> Somando o IC do histórico e os cenários do Monte Carlo, a chance de lucro fica entre ~42% e ~65%. Comunicar “cerca de metade das vezes, com lucro de até 12%; na outra metade, 0%” é mais honesto que “57,8%”.</li>
+    <li><b>Calibração.</b> Nesta ação e estrutura, o modelo foi só um pouco melhor que a frequência histórica para direção (ganho de 1%–2%) e um pouco melhor para barreira (4%). Use as probabilidades como ordem de grandeza.</li>
+    <li><b>Saída antecipada.</b> Em cerca de metade dos casos a estrutura bate 150% do CDI antes do vencimento (dia mediano 39 no histórico, 14 no Monte Carlo); com a saída, o % do CDI mediano do período investido é de 122% no histórico.</li>
+    <li><b>Custo.</b> O custo teórico é −0,39% e o strike de custo zero seria 107,07%: a estrutura oferecida (106%) está próxima do preço justo, com uma pequena remuneração embutida.</li>
+  </ol>
+  <div class="callout"><div class="t">Roteiro de conversa</div>
+    “Seu principal está protegido no vencimento. Se BBDC4 subir sem passar de 12% em nenhum momento, você ganha a alta inteira; se passar de 12% em algum dia, seu ganho fica em 6%. Com a volatilidade alta de agora, a chance de bater 12% no caminho é maior do que o normal — algo entre 45% e 65%. Em cenários de queda, você termina em 0%, abaixo do CDI do período.”</div>
+
+  <h2 id="s6b" class="pb">Exemplo 2 — a lâmina Proteção Total BBDC4, do backtest ao ex-post</h2>
+  <p><b>Situação.</b> Operação real contratada em 19/11/2025 com vencimento em 25/11/2026 (apuração em 24/11/2026, 249 pregões), sem custo: ação + put 104,1% + call vendida 104,1% Knock Up and In 138,1% + 0,5 call comprada 100% Knock Up and Out 138,1%. Para reproduzir, escolha o preset “Proteção Total (BBDC4)” — ele preenche as datas da lâmina.</p>
+  <figure><img src="img/21_pt_estrutura.png"><figcaption><b>Figura 21.</b> Composição da lâmina no simulador: retorno mínimo de 4,10% e máximo de cerca de 57% (logo abaixo da barreira).</figcaption></figure>
+  <figure><img src="img/22_pt_payoff.png"><figcaption><b>Figura 22.</b> Payoff da Proteção Total: piso de 4,10%, alta turbinada em 50% até a barreira e retorno fixo de 4,10% se a barreira for tocada.</figcaption></figure>
+  <h3>O que o backtest diz (12 meses)</h3>
+  <figure><img src="img/23_pt_backtest.png"><figcaption><b>Figura 23.</b> P(lucro) = 100% (o piso de 4,10% garante lucro), mas P(&gt; CDI de hoje) = 22,9% (IC 16%–32%) e P(barreira) = 32,7%. Amostra efetiva de só ≈ 16 períodos — daí as faixas largas.</figcaption></figure>
+  <p>É o caso clássico em que <b>P(lucro) engana</b>: a estrutura nunca perde, mas em ~77% das janelas rende menos que o CDI de hoje (13,65% a.a.). Sem o ajuste ao CDI de hoje, P(&gt; CDI) seria 35% — porque em boa parte do histórico o CDI era muito mais baixo.</p>
+  <h3>O que aconteceu de fato (ex-post até 28/10/2026)</h3>
+  <figure><img src="img/24_expost.png"><figcaption><b>Figura 24.</b> 232 pregões decorridos; barreira não tocada. Marcação intrínseca de +4,10% (R$ 1.230 sobre R$ 30.000), contra −15,56% da ação no mesmo período.</figcaption></figure>
+  <figure><img src="img/25_expost_grafico.png"><figcaption><b>Figura 25.</b> Caminho realizado de BBDC4 com strikes e barreira em R$: a ação chegou a subir cerca de 30% em outubro (máxima perto de R$ 22,60, abaixo da barreira de R$ 24,02) e despencou em 26/10/2026.</figcaption></figure>
+  <figure><img src="img/26_expost_saida.png"><figcaption><b>Figura 26.</b> Retorno de saída estimado × gatilho de 150% do CDI. A marcação subiu até perto do gatilho em outubro e caiu com o crash: em 28/10/2026, +5,65% contra gatilho de +19,78%.</figcaption></figure>
+  <div class="callout ink"><div class="t">Lição do exemplo</div>
+    A proteção funcionou exatamente como desenhada: com a ação em −15,6%, a estrutura segura +4,10% (e esse piso está garantido se a barreira não for tocada até a apuração). O ganho extra da alta, que chegou a valer quase o gatilho de 150% do CDI dias antes, evaporou com a queda — o tipo de trajetória que só um modelo de caminhos (e não de preço final) consegue mostrar.</div>
+</section>
+
+<!-- =============================== 7 =============================== -->
+<section>
+  <h1 class="sec" id="s7"><span class="n">7</span> Como ler e comunicar os resultados</h1>
+  <ol>
+    <li><b>Comece por P(lucro), mas não pare nele.</b> Estruturas com piso têm P(lucro) alto por construção; a pergunta relevante costuma ser P(&gt; CDI de hoje) — o custo de oportunidade.</li>
+    <li><b>Sempre fale em faixas.</b> O IC 95% (histórico) e a faixa de cenários (Monte Carlo) são parte do número. Diferenças de poucos pontos entre estruturas raramente são significativas.</li>
+    <li><b>Use o simulador para comparar.</b> O ponto forte do modelo é comparar estruturas na mesma ação e prazo, dimensionar o risco de barreira e mostrar a forma da distribuição — não prever a direção da ação.</li>
+    <li><b>Olhe a barreira com a vol de hoje.</b> Se a vol prevista (painel de vol) estiver muito acima da de longo prazo, como depois de 26/10/2026, P(barreira) do Monte Carlo será maior que a do histórico — e é ela que reflete o “agora”. A vol implícita da mesa pode estar abaixo da do GARCH; os cenários de vol ×0,8 mostram o efeito.</li>
+    <li><b>Explique os dois ramos.</b> Em estruturas com barreira, o cliente precisa entender que o resultado depende do caminho, não só do preço final.</li>
+    <li><b>Confirme o monitoramento e o custo</b> com a mesa: fechamento × intradiário e o custo efetivo mudam as probabilidades.</li>
+    <li><b>Considere a saída antecipada.</b> Em boa parte dos cenários a estrutura bate 150% do CDI antes do vencimento; o retorno anualizado com saída costuma ser maior que levando ao vencimento.</li>
+    <li><b>Retornos brutos de IR</b>, sem risco de contraparte, liquidez ou resgate antecipado a mercado.</li>
+  </ol>
+  <h2>Checklist antes de apresentar</h2>
+  <table>
+    <tbody>
+      <tr><td>☐ Ação, estrutura e prazo conferidos com a lâmina (strikes, barreiras, proporções, datas)</td></tr>
+      <tr><td>☐ Custo informado da mesa (ou modo Teórico com a vol implícita, se souber)</td></tr>
+      <tr><td>☐ Monitoramento da barreira confirmado</td></tr>
+      <tr><td>☐ CDI de referência (o de hoje ou o DI futuro do vencimento)</td></tr>
+      <tr><td>☐ P(lucro), P(&gt; CDI de hoje) e P(barreira) com as faixas, no histórico e no Monte Carlo</td></tr>
+      <tr><td>☐ Painel de vol: vol de hoje × longo prazo</td></tr>
+      <tr><td>☐ Teste de calibração rodado para a ação e a estrutura</td></tr>
+      <tr><td>☐ Avisos: ferramenta educacional, passado não garante futuro, retornos brutos de IR</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- =============================== 8 =============================== -->
+<section>
+  <h1 class="sec" id="s8"><span class="n">8</span> Limitações, avisos e referências</h1>
+  <h2>Limitações</h2>
+  <ul>
+    <li><b>Passado não garante futuro.</b> Janelas sobrepostas são muito correlacionadas; a amostra efetiva é pequena, principalmente em prazos longos.</li>
+    <li><b>Baixa capacidade preditiva para direção.</b> No teste walk-forward, o ganho do modelo sobre a frequência histórica foi de 1%–3% para lucro e &gt; CDI e de 4%–8% para barreira.</li>
+    <li>O ajuste ao CDI de hoje preserva o excesso de retorno da ação sobre o CDI de cada época: o histórico ainda carrega o prêmio de risco de 2010–2026.</li>
+    <li>Os parâmetros em % são aplicados igualmente em todas as janelas: a estrutura <b>não é reprecificada</b> com a vol e os juros de cada época.</li>
+    <li>O GARCH reage forte a choques extremos e usa parâmetros estimados no período inteiro carregado.</li>
+    <li>O modo Teórico usa vol histórica e taxa constante, sem skew nem dividendos discretos; pode divergir do preço da mesa. A marcação da saída antecipada é uma estimativa: o preço de desmontagem é o da mesa.</li>
+    <li>O preço ajustado aproxima o ajuste de strikes e barreiras das lâminas; o calendário futuro usa uma aproximação dos feriados da B3.</li>
+    <li>Retornos brutos de IR; não modela risco de contraparte, chamada de margem, liquidez nem resgate antecipado a mercado.</li>
+  </ul>
+  <div class="callout warn"><div class="t">Aviso</div>
+    Ferramenta educacional, independente e de código aberto; não é afiliada a nenhuma instituição financeira e não é material oficial de nenhuma corretora. Não constitui recomendação de investimento. Rentabilidade passada não representa garantia de rentabilidade futura. Leia a lâmina da operação antes de investir. Código-fonte, testes e documentação técnica completa (fórmulas, módulos e validação cruzada Python × JavaScript): github.com/viniciusmarquesserpeloni-commits/estruturadas-sim.</div>
+  <h2>Referências</h2>
+  <ul class="refs">
+    <li>Acerbi, C.; Tasche, D. (2002). On the coherence of expected shortfall. <i>Journal of Banking &amp; Finance</i>, 26(7).</li>
+    <li>Barone-Adesi, G.; Giannopoulos, K.; Vosper, L. (1999). VaR without correlations for portfolios of derivative securities. <i>Journal of Futures Markets</i>, 19(5).</li>
+    <li>Black, F.; Scholes, M. (1973). The pricing of options and corporate liabilities. <i>Journal of Political Economy</i>, 81(3).</li>
+    <li>Bollerslev, T. (1986). Generalized autoregressive conditional heteroskedasticity. <i>Journal of Econometrics</i>, 31(3).</li>
+    <li>Brent, R. (1973). <i>Algorithms for Minimization without Derivatives</i>. Prentice-Hall.</li>
+    <li>Brier, G. (1950). Verification of forecasts expressed in terms of probability. <i>Monthly Weather Review</i>, 78(1).</li>
+    <li>Broadie, M.; Glasserman, P.; Kou, S. (1997). A continuity correction for discrete barrier options. <i>Mathematical Finance</i>, 7(4).</li>
+    <li>Glosten, L.; Jagannathan, R.; Runkle, D. (1993). On the relation between the expected value and the volatility of the nominal excess return on stocks. <i>Journal of Finance</i>, 48(5).</li>
+    <li>Künsch, H. (1989). The jackknife and the bootstrap for general stationary observations. <i>Annals of Statistics</i>, 17(3).</li>
+    <li>Merton, R. (1980). On estimating the expected return on the market. <i>Journal of Financial Economics</i>, 8(4).</li>
+    <li>Politis, D.; Romano, J. (1992). A circular block-resampling procedure for stationary data. In <i>Exploring the Limits of Bootstrap</i>. Wiley.</li>
+    <li>Reiner, E.; Rubinstein, M. (1991). Breaking down the barriers. <i>Risk</i>, 4(8).</li>
+    <li>Regulamento Delegado (UE) 2021/2268 — PRIIPs: cenários de desempenho por janelas históricas.</li>
+  </ul>
+</section>
+</body>
+</html>

@@ -53,8 +53,8 @@ antecipada: histórico 69% (dia mediano 62), MC 22% (dia 224) · operação real
 22/10/2026.
 
 **Estado:** no GitHub até `7de331d`; o commit de docs `0cfa942` e a Fase 2 estão só locais até o usuário autorizar o push (conferir
-`git log origin/main..`). Testes: 73 pytest + 20 node. Pedido em aberto: PDF didático com o layout do simulador
-e passo a passo com imagens. Mercado: Ibovespa −13,9% em 26/10/2026 (vol muito alta). Pendências do usuário: ativar 2FA no GitHub até 23/11/2026; descobrir o spread real de saída.
+`git log origin/main..`). Testes: 73 pytest + 20 node. Guia em PDF pronto em `docs/guia/` (gerado por
+`scripts/guia/`; PDF/imagens fora do git até o usuário autorizar). Mercado: Ibovespa −13,9% em 26/10/2026 (vol muito alta). Pendências do usuário: ativar 2FA no GitHub até 23/11/2026; descobrir o spread real de saída.
 
 **Comandos:** `.venv/Scripts/python -m pytest -q` · `node --test tests/js/engine.test.mjs` ·
 `.venv/Scripts/python scripts/make_js_fixtures.py` (após mudar o motor Python) ·

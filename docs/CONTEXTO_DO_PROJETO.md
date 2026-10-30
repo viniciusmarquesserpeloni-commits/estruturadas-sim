@@ -121,9 +121,16 @@
   45,6%). Saída antecipada: histórico 47,7% (dia 39) com marcação GARCH (53,4% com a vol móvel); MC 50,2%
   (dia 14). Calibração (Brier, ganho sobre o chute fixo, FHS-GJR): BBDC4 +1,0 / +2,1 / +4,1%; PETR4 +2,9 /
   +2,2 / +7,0%; VALE3 +0,9 / +3,2 / +7,7% (lucro / > CDI / barreira); bootstrap sempre pior.
-- **Pedido pendente do usuário (29/10/2026):** depois da Fase 2, um **PDF com o layout do simulador**,
-  didático para especialistas de investimentos: o que é estruturada, tipos e descrições, como funciona o
-  modelo, métodos estatísticos e passo a passo de uso com exemplos práticos e imagens de cada passo.
+- **Guia em PDF (29/10/2026, pedido do usuário):** `docs/guia/Guia_Simulador_Estruturadas.pdf` (32 páginas, identidade
+  visual do site): o que é estruturada, os 9 tipos com gráfico de payoff gerado pelo motor, como o modelo funciona,
+  métodos estatísticos, passo a passo com 27 telas e 2 exemplos (Collar KI 3m BBDC4; Proteção Total BBDC4 até o
+  ex-post). Gerado por `scripts/guia/capturar_telas.py` (Chrome headless via DevTools, site em localhost:8770) e
+  `scripts/guia/montar_guia.py` (template `guia_template.html` → HTML → PDF, sumário com páginas via pypdf). PDF e
+  imagens **não versionados** até o usuário autorizar (regra de mídia). Para refazer com dados novos: servir o site,
+  rodar os dois scripts e revisar números citados no template (estão fixos no texto, com data de 28/10/2026).
+- **Bug antigo corrigido (desde `218b596`):** todas as páginas do site usam o mesmo `#view`; uma página já visitada
+  continuava "viva" e se redesenhava por cima da atual a cada recálculo (e trocar a estrutura fora da aba Estrutura
+  dava erro). Agora o roteador guarda `App.route` e cada página só se atualiza se for a rota atual.
 - **Mercado em 26/10/2026:** Ibovespa −13,9% em um dia (BBDC4 −24,5%, ITUB4 −13,7%); dado real, conferido. A vol
   realizada de 63 pregões de BBDC4 foi a 63% (≈ 1,9× a média) — argumento a favor da Fase 2 (vol condicional).
 - **Pendências do usuário:** o GitHub exige ativar a verificação em duas etapas até **23/11/2026**, senão a conta
@@ -217,6 +224,7 @@ Para acompanhar um deploy sem o `gh`:
 | API do BCB com falha momentânea → CDI `None` → ajuste de regime desligado em silêncio | `fetch_cdi_daily` tenta 3 vezes por bloco; no Streamlit a falha não fica em cache |
 | Grade de cenários com 2.000 caminhos tinha ruído de ±1 p.p. (célula central ≠ MC principal) | 5.000 caminhos por cenário |
 | Heredocs longos no Bash deste ambiente quebram ("unexpected EOF") | escrever scripts de patch com a ferramenta de escrita e executá-los |
+| Navegador do app guarda JS antigo (`?v=__V__` só muda no deploy) | `fetch(url, {cache: 'reload'})` nos assets e recarregar; o Chrome headless dos scripts do guia usa perfil novo |
 
 ## 8. Ideias de próximos passos (roadmap)
 
