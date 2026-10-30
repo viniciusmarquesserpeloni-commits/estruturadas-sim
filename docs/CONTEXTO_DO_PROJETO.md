@@ -5,7 +5,7 @@
 > as decisões já tomadas, o estado atual e as armadilhas conhecidas. Detalhes de cálculo estão no
 > [README](../README.md); a metodologia em linguagem de usuário, em [METODOLOGIA.md](../METODOLOGIA.md).
 >
-> Última atualização: 28/10/2026 (inclui a saída antecipada e a Fase 1 da revisão metodológica).
+> Última atualização: 29/10/2026 (inclui a saída antecipada e as Fases 1 e 2 da revisão metodológica).
 
 ## 1. Quem é o usuário e como trabalhar com ele
 
@@ -79,8 +79,20 @@
       bootstrap; grade de 9 cenários drift × vol (5.000 caminhos, mesmos sorteios) com faixa mín–máx;
     - extras escolhidos: **CVaR 5%** e **bootstrap sorteando fechamento + máxima + mínima juntos**;
     - indicadores na ordem P(lucro) → P(> CDI de hoje) → P(barreira), sempre com faixa;
-    - **Fase 2 só depois da revisão do usuário**: FHS-GARCH (eu sugeri testar também GJR, assimétrico), painel de
-      vol, saída antecipada com vol do GARCH, painel de calibração walk-forward.
+    - **Fase 2** (aval do usuário em 29/10/2026: "Ok, siga para a FASE 2"): Monte Carlo **FHS-GJR** como padrão,
+      painel de vol, saída antecipada marcada com a vol do GARCH, painel de calibração walk-forward (sob demanda).
+12. **Decisões de implementação da Fase 2:**
+    - **GJR-GARCH como padrão** (inclui o GARCH(1,1) como caso γ = 0; nos testes walk-forward os dois empatam);
+      seleção "Modelo de vol" para trocar;
+    - **GARCH ajustado na hora**, inclusive no site (Web Worker; 0,05–0,9 s), em vez de pré-calcular no
+      `build_site_data.py` — assim respeita o período "Desde" e CSV enviado;
+    - Nelder-Mead **escrito igual** em Python e JS, 2 pontos iniciais + reinícios, passo 0,25 (o passo 0,5 com
+      1 início parava na borda p = 0,999 na série do Yahoo com o pregão de 29/10 → vol de longo prazo 150%);
+    - FHS com sorteio i.i.d. pelo **mulberry32 vetorizado** (mesmos caminhos nos dois motores);
+    - máxima/mínima **padronizadas pela vol GARCH do dia** e sorteadas junto (sem BGK no FHS);
+    - marcação da saída: vol média prevista para o prazo restante + 3 pts; parâmetros do período inteiro;
+    - calibração: datas a cada 10 pregões após 504, 1.000 caminhos, GARCH reestimado a cada 252, chute fixo =
+      frequência nas janelas já encerradas até a data; Brier e diagrama de confiabilidade (faixas de 10 p.p.).
 
 ## 4. Estado atual (28/10/2026)
 
@@ -89,7 +101,7 @@
   - `e5e97a6` estrutura inicial · `bae8245` motor de payoff + presets · `27faaee` precificação ·
     `7980c97` dados/backtest/métricas · `8c18b52` fix pandas 3 · `c12226f` app Streamlit · `217b8b7` README ·
     `5c49e4a` motor JS · `218b596` site estático + workflow.
-- **Testes:** 66 pytest + 16 node, todos passando.
+- **Testes:** 73 pytest + 20 node, todos passando.
 - **Deploy:** GitHub Pages ativo com *Source: GitHub Actions*; primeiro deploy (run 39344983819) passou em todas
   as etapas; site conferido no ar (BBDC4/Proteção Total: 3.924 janelas, P(lucro) 100%, P>CDI 35,07%, barreira
   acionada 27,55%, ex-post +23,42% até 19/10/2026).
@@ -100,9 +112,18 @@
   22/10/2026. Commits `bfed7af` (Python), `04387b4` (JS) e `2688dc9` (site/Streamlit/docs), enviados.
 - **Fase 1 da revisão (28/10/2026):** implementada nos dois motores, no site e no Streamlit (commits `1c7a4fb`,
   `5df8527`, `194f71b`, `7de331d`); **enviada e publicada** (deploy run 40807283702, site conferido no ar com
-  dados até 28/10/2026 e CDI de hoje 13,65%). Aguardando a revisão do usuário antes da Fase 2. Números de referência
-  (Collar KI 3m BBDC4, dados até 28/10/2026, ajuste ligado): P(lucro) 57,8% (IC 50–65%), P(> CDI de hoje) 48,3%
-  (IC 41–56%), P(barreira) 44,6%, saída antecipada 53,4% (IC 46–61%), dia mediano 31.
+  dados até 28/10/2026 e CDI de hoje 13,65%). Números de referência (Collar KI 3m BBDC4, dados até 28/10/2026,
+  ajuste ligado): P(lucro) 57,8% (IC 50–65%), P(> CDI de hoje) 48,3% (IC 41–56%), P(barreira) 44,6%.
+- **Fase 2 da revisão (29/10/2026):** implementada nos dois motores, no site e no Streamlit; commits locais
+  (conferir `git log origin/main..`) — **pedir aval antes do push**. Referência (mesmo exemplo): GJR α 0,092 ·
+  γ 0 · β 0,878 · persistência 0,970; vol de hoje 114,7%, prevista para 3 meses 82,0%, longo prazo 37,0%,
+  meia-vida 23 pregões. MC FHS: P(lucro) 47,5%, P(> CDI) 43,6%, P(barreira) 62,0% (bootstrap: 55,5 / 47,1 /
+  45,6%). Saída antecipada: histórico 47,7% (dia 39) com marcação GARCH (53,4% com a vol móvel); MC 50,2%
+  (dia 14). Calibração (Brier, ganho sobre o chute fixo, FHS-GJR): BBDC4 +1,0 / +2,1 / +4,1%; PETR4 +2,9 /
+  +2,2 / +7,0%; VALE3 +0,9 / +3,2 / +7,7% (lucro / > CDI / barreira); bootstrap sempre pior.
+- **Pedido pendente do usuário (29/10/2026):** depois da Fase 2, um **PDF com o layout do simulador**,
+  didático para especialistas de investimentos: o que é estruturada, tipos e descrições, como funciona o
+  modelo, métodos estatísticos e passo a passo de uso com exemplos práticos e imagens de cada passo.
 - **Mercado em 26/10/2026:** Ibovespa −13,9% em um dia (BBDC4 −24,5%, ITUB4 −13,7%); dado real, conferido. A vol
   realizada de 63 pregões de BBDC4 foi a 63% (≈ 1,9× a média) — argumento a favor da Fase 2 (vol condicional).
 - **Pendências do usuário:** o GitHub exige ativar a verificação em duas etapas até **23/11/2026**, senão a conta
@@ -115,7 +136,7 @@
 estruturadas-sim/
   app.py                     Streamlit (barra lateral + 5 abas)
   METODOLOGIA.md             texto da aba de metodologia do Streamlit
-  estruturadas/              motor Python (legs, presets, pricing, data, backtest, early_exit, metrics, io, charts, formatting)
+  estruturadas/              motor Python (legs, presets, pricing, data, backtest, garch, calibration, early_exit, metrics, rng, io, charts, formatting)
   presets/protecao_total_bbdc4.json   lâmina de exemplo
   scripts/
     build_site_data.py       gera site/data/ (preços Yahoo + CDI/Selic BCB)
@@ -124,8 +145,8 @@ estruturadas-sim/
   site/
     index.html               layout do painel; assets com ?v=__V__ (trocado pelo hash no deploy)
     assets/css/styles.css    tema do painel + estilos do simulador (final do arquivo)
-    assets/js/engine/        legs.js, presets.js, pricing.js, backtest.js, early.js (porta do Python; window/globalThis.Estr)
-    assets/js/worker.js      Web Worker (price, solve, hist, mc, hexit, mcexit)
+    assets/js/engine/        legs.js, presets.js, pricing.js, garch.js, backtest.js, early.js, calib.js (porta do Python; window/globalThis.Estr)
+    assets/js/worker.js      Web Worker (price, solve, hist, mc, scen, hexit, mcexit, calib com progresso)
     assets/js/core.js        App: formatação, estado (localStorage "es:state"), dados, Worker, orquestração
     assets/js/charts.js      ECharts
     assets/js/params.js      barra de parâmetros + "Mais opções"
@@ -154,8 +175,8 @@ troca a estrutura (preset, JSON, solver).
 ```bash
 cd estruturadas-sim
 .venv/Scripts/python -m pip install -r requirements.txt     # se o venv sumir: python -m venv .venv
-.venv/Scripts/python -m pytest -q                            # 56 testes
-node --test tests/js/engine.test.mjs                         # 13 testes (no Windows, passar o arquivo, não a pasta)
+.venv/Scripts/python -m pytest -q                            # 73 testes
+node --test tests/js/engine.test.mjs                         # 20 testes (no Windows, passar o arquivo, não a pasta)
 .venv/Scripts/python scripts/make_js_fixtures.py             # após mudar o motor Python
 .venv/Scripts/python scripts/build_site_data.py PETR4 BBDC4  # dados locais do site (todas: sem argumentos, ~1 min)
 python -m http.server 8770 --directory site                  # site local em http://localhost:8770
@@ -178,7 +199,10 @@ Para acompanhar um deploy sem o `gh`:
 | Tickers deslistados/renomeados no Yahoo (ELET3→AXIA3, EMBR3→EMBJ3, BRFS3/MRFG3→MBRF3…) | `build_site_data.py` ignora quem não tem dados; lista já limpa |
 | API SGS do BCB limita séries diárias a 10 anos por consulta | download do CDI em blocos de 5 anos |
 | `node --test tests/js/` (pasta) falha no Windows | rodar o arquivo `tests/js/engine.test.mjs` |
-| RNG do Python (PCG64) ≠ JS (mulberry32) | MC compara só estatisticamente; partes determinísticas comparam até 1e-10 |
+| RNG do Python (PCG64) ≠ JS (mulberry32) | bootstrap/GBM comparam só estatisticamente; o FHS usa o mulberry32 vetorizado nos dois e dá os mesmos caminhos |
+| Nelder-Mead parava na borda p = 0,999 (vol de longo prazo 150%) | passo 0,25, 2 pontos iniciais e reinícios; teste contra o scipy |
+| `math.exp` estoura no Python (o JS devolve Infinity) | `_exp` com OverflowError → inf no `garch.py` |
+| Fixtures antigas da saída antecipada passaram a usar o GARCH (novo padrão) e divergiam por 1e-9 | casos antigos fixados em `vol_mode="rolling"`; o GARCH tem fixtures próprios com os parâmetros do Python |
 | Enunciado original pedia 42,10%/57,10% na Proteção Total | com as pernas da lâmina o exato é 42,00%/57,00% (a lâmina arredonda 42/57); testes usam o exato e explicam |
 | Máximo "logo abaixo da barreira" | supremo não atingido: P(atingir retorno máximo) pode ser 0% |
 | `streamlit` ≥ 1.50: `use_container_width` descontinuado | usar o padrão (`width="stretch"`) |
@@ -202,10 +226,8 @@ Para acompanhar um deploy sem o `gh`:
 - Autocalls/estruturas com cupom; mais de um ativo.
 - Comparar várias estruturas lado a lado; IR e CDI líquido.
 - Link compartilhável com a estrutura codificada na URL (hoje o estado fica no `localStorage`).
-- **Fase 2 da revisão** (aguardando aval): FHS-GARCH/GJR como método padrão do MC (parâmetros pré-calculados no
-  `build_site_data.py` para o site; ajuste no worker para CSV), painel de vol (hoje, longo prazo, meia-vida),
-  BGK com σ do passo, saída antecipada marcada com a vol do GARCH, painel de calibração walk-forward (Brier ×
-  climatologia, diagrama de confiabilidade) sob demanda no worker.
+- Opcionais da revisão: bootstrap estacionário com bloco automático; GARCH com resíduos t; benchmark "ação + CDI
+  com o mesmo delta".
 - Publicar o Streamlit no Community Cloud, se o usuário quiser.
 - Saída antecipada: calibrar spread de saída e adicional de vol com extratos de marcação do banco; vol
   implícita real via COTAHIST da B3 (ações com opções líquidas); vol variável no MC.

@@ -29,7 +29,7 @@ inicial, tipo de barreira *Knock Up/Down and In/Out* e proporção), e os result
      4.9 Backtest por janelas históricas · 4.10 Monte Carlo · 4.11 Monitoramento intradiário ·
      4.12 Ex-post · 4.13 Métricas · 4.14 Quadro de rentabilidade · 4.15 Precificação teórica ·
      4.16 Solver de custo zero · 4.17 Textos em linguagem simples · 4.18 Saída antecipada ·
-     4.19 Incerteza: intervalos de confiança e cenários
+     4.19 Incerteza: intervalos de confiança e cenários · 4.20 Volatilidade condicional (FHS-GARCH) e calibração
 5. [Presets e fórmulas do payoff](#5-presets-e-fórmulas-do-payoff)
 6. [Módulos: Python, JavaScript e demais linguagens](#6-módulos-python-javascript-e-demais-linguagens)
 7. [Bibliotecas e serviços externos](#7-bibliotecas-e-serviços-externos)
@@ -52,7 +52,8 @@ as probabilidades são condicionadas ao momento atual — régua no **CDI de hoj
 de hoje, Monte Carlo com retorno esperado neutro (CDI) — e sempre aparecem com uma **faixa de incerteza**. Os
 indicadores principais vêm nesta ordem: **P(lucro) → P(retorno > CDI de hoje) → P(barreira acionada)**. Essa
 orientação vem da revisão metodológica em [docs/REVISAO_METODOLOGICA.md](docs/REVISAO_METODOLOGICA.md)
-(Fase 1 implementada; Fase 2, com volatilidade condicional GARCH e painel de calibração, em andamento).
+(Fase 1: CDI de hoje, ICs, drift e cenários; Fase 2: Monte Carlo FHS-GARCH com a vol de hoje, painel de vol e
+painel de calibração walk-forward — seções 4.19 e 4.20).
 
 | Recurso | Descrição |
 |---|---|
@@ -273,10 +274,11 @@ tabela detalhada como métrica secundária.
 
 ### 4.10 Monte Carlo (complemento)
 
-Volatilidade de base: desvio-padrão dos log-retornos de todo o histórico carregado × √252 (na Fase 2 da
-revisão, passa a ser a vol condicional de um GARCH).
+Três métodos. O padrão é o **FHS-GARCH** (seção 4.20), que parte da vol de hoje estimada por um GJR-GARCH e
+sorteia choques reais padronizados. Bootstrap e GBM usam como vol de base o desvio-padrão dos log-retornos de
+todo o histórico carregado × √252.
 
-- **Bootstrap em blocos circular (padrão):** sorteia, para cada bloco de `L` dias (padrão 20), uma posição
+- **Bootstrap em blocos circular:** sorteia, para cada bloco de `L` dias (padrão 20), uma posição
   inicial aleatória na série e copia `L` dias consecutivos (dando a volta no fim da série) — **o fechamento, a
   máxima e a mínima de cada dia juntos** (`lr_t = ln(C_t/C_{t−1})`, `up_t = ln(H_t/C_t)`, `dn_t = ln(L_t/C_t)`);
   encadeia blocos até N dias: `ln S_j = Σ lr*`, máxima do dia `= S_j·e^{up}`, mínima `= S_j·e^{dn}`.
@@ -284,7 +286,7 @@ revisão, passa a ser a vol condicional de um GARCH).
   caudas gordas reais; sortear a máxima/mínima junto dá barreiras intradiárias sem precisar da correção BGK.
 - **GBM (log-normal):** `ln S_{j+1} − ln S_j = μ_d + σ·√(1/252)·Z`, com `Z ~ N(0,1)` e variáveis antitéticas;
   intradiário pela correção BGK (4.11).
-- **Retorno esperado da ação (drift)**, escolhido pelo usuário e aplicado **aos dois métodos**:
+- **Retorno esperado da ação (drift)**, escolhido pelo usuário e aplicado **aos três métodos**:
 
 | Opção | Retorno esperado anual μ |
 |---|---|
@@ -306,15 +308,15 @@ lr* = [ln(1 + μ)/252 − ½·k²·var(lr)] + k · (lr − média(lr))        �
   anual é ≈ σ/√anos (≈ ±8 p.p. em BBDC4, ±10,5 p.p. em PETR4; Merton, 1980), maior que o próprio prêmio de
   risco —, e a sensibilidade é alta (revisão metodológica, Collar KI 3m em BBDC4, GBM com σ = 37%:
   drift −10% a.a. → P(lucro) 41%; 0% → 46%; CDI → 53%; CDI + 5 p.p. → 55%).
-- Padrão: 10.000 caminhos, seed 42 (resultados reproduzíveis). Python e JS usam geradores aleatórios
-  diferentes (NumPy PCG64 × mulberry32), então os números do Monte Carlo coincidem **estatisticamente**, não
-  dígito a dígito.
+- Padrão: 10.000 caminhos, seed 42 (resultados reproduzíveis). No FHS, Python e JS usam o mesmo gerador
+  (mulberry32) na mesma ordem e dão os mesmos caminhos; no bootstrap e no GBM os geradores são diferentes (NumPy
+  PCG64 × mulberry32) e os números coincidem **estatisticamente**, não dígito a dígito.
 
 ### 4.11 Monitoramento de barreira: fechamento × intradiário
 
 - **Fechamento diário (padrão):** compara a barreira com o Close de cada pregão.
-- **Intradiário:** no histórico e no bootstrap, usa a **máxima** do dia para barreiras de alta e a
-  **mínima** para as de baixa (no bootstrap, as sorteadas junto com o fechamento). No GBM (que só gera
+- **Intradiário:** no histórico, no FHS e no bootstrap, usa a **máxima** do dia para barreiras de alta e a
+  **mínima** para as de baixa (no FHS e no bootstrap, as sorteadas junto com o fechamento). No GBM (que só gera
   fechamentos) aplica a **correção de Broadie-Glasserman-Kou**: a barreira é deslocada em direção ao preço
   por `β·σ·√Δt`, com `β = 0,5826` e `Δt = 1/252`:
 
@@ -474,8 +476,11 @@ erros padrão. No modo intradiário a barreira não é ajustada.
 **Volatilidade "implícita" da marcação.** Não há histórico público de vol implícita para a maioria das ações.
 Opções implementadas:
 
-- **Vol realizada móvel** (padrão): desvio dos últimos 63 log-retornos até o próprio dia (sem olhar o futuro)
-  × √252, mais um **adicional** (padrão 3 pontos), já que o mercado costuma cobrar vol acima da realizada.
+- **Vol GARCH do prazo restante** (padrão desde a Fase 2): vol média prevista pelo GJR-GARCH para os pregões que
+  faltam, a partir da variância do dia (seção 4.20), mais um **adicional** (padrão 3 pontos). No Monte Carlo FHS,
+  cada caminho usa a própria variância simulada.
+- **Vol realizada móvel:** desvio dos últimos 63 log-retornos até o próprio dia (sem olhar o futuro)
+  × √252, mais o adicional, já que o mercado costuma cobrar vol acima da realizada.
 - **Vol da contratação fixa:** a vol realizada do dia da contratação + adicional, durante toda a operação.
 
 **Calibração ao preço pago (padrão).** O modelo raramente dá exatamente o preço da lâmina: a mesa usa vol
@@ -496,8 +501,8 @@ contra 62 com calibração, no exemplo abaixo).
 **Taxa de juros.** Histórico: o CDI de cada pregão, em taxa contínua `252·ln(1 + CDI do dia)`. Monte Carlo:
 o CDI atual constante. Ex-post: o CDI realizado.
 
-**Monte Carlo.** A saída antecipada usa os primeiros 2.000 caminhos completos (guardados pelo MC), com vol
-constante (vol histórica + adicional) e CDI constante. Com monitoramento intradiário, os toques usam a barreira
+**Monte Carlo.** A saída antecipada usa os primeiros 2.000 caminhos completos (guardados pelo MC), com CDI
+constante e vol de marcação constante (vol do método + adicional) — no FHS, a vol GARCH de cada caminho. Com monitoramento intradiário, os toques usam a barreira
 deslocada em direção ao preço, como no payoff do MC.
 
 **Juros mudam tudo.** Com CDI alto, a parte de renda fixa da estrutura (o piso) vale menos e a régua de 150%
@@ -532,9 +537,10 @@ supõe que o investidor sempre aceita a desmontagem quando orientado.
 
 A revisão metodológica testou a capacidade preditiva do simulador (walk-forward, 722 datas, Collar KI 3m) com
 o *Brier score* (menor = melhor; 0,25 = chutar 50%): para **direção** (P(lucro), P(> CDI)), nenhum modelo — vol
-incondicional, realizada 63d, EWMA, GARCH — superou o "chute climatológico" (a frequência histórica); o GARCH
-melhorou levemente a **probabilidade de barreira** (volatilidade é previsível no curto prazo, direção não). Por
-isso a ferramenta comunica faixas, não números cravados.
+incondicional, realizada 63d, EWMA, GARCH — superou com folga o "chute climatológico" (a frequência histórica); o
+GARCH melhorou a **probabilidade de barreira** (volatilidade é previsível no curto prazo, direção não). O painel
+de calibração da Fase 2 (seção 4.20) refaz esse teste para qualquer estrutura e ação. Por isso a ferramenta
+comunica faixas, não números cravados.
 
 **Histórico — IC 95% por moving block bootstrap.** Para cada indicador 0/1 por janela (lucro, > CDI de hoje,
 perda, barreira, saída antecipada): sorteiam-se blocos de `N` janelas consecutivas (N = prazo, o tamanho da
@@ -549,6 +555,105 @@ importa é de **premissa**. Roda-se uma grade de 9 cenários — retorno esperad
 o cenário central (CDI, vol 1,0) em destaque, a faixa mínimo–máximo de cada indicador e três tabelas de
 sensibilidade (P(lucro), P(> CDI de hoje), P(barreira)). A nota da tabela compara a vol de base com a vol
 realizada dos últimos 63 pregões, para mostrar se o momento atual está mais ou menos volátil que a média.
+
+### 4.20 Volatilidade condicional (FHS-GARCH), painel de vol e calibração walk-forward
+
+Fase 2 da revisão metodológica. A pergunta "qual a chance **se eu contratar agora**?" depende muito da vol de
+**hoje**, e a vol tem memória: dias agitados vêm em sequência. O bootstrap e o GBM usam a vol média do período
+(≈ 34% a.a. em BBDC4); logo depois do crash de 26/10/2026 (BBDC4 −24,5%, Ibovespa −13,9%), a vol de hoje está
+muito acima disso.
+
+**GJR-GARCH(1,1)** ([`estruturadas/garch.py`](estruturadas/garch.py), `engine/garch.js`). Sobre os log-retornos
+sem a média, `ε_t = r_t − média`:
+
+```
+h(t+1) = ω + (α + γ·1[ε(t) < 0])·ε(t)² + β·h(t)          (GARCH(1,1): γ = 0)
+```
+
+`h` é a variância do dia seguinte: um choque grande hoje (ε²) aumenta a vol de amanhã, e β dá a memória. No GJR
+(Glosten, Jagannathan & Runkle, 1993), quedas pesam mais (γ > 0, efeito alavancagem); quando não há assimetria
+nos dados o ajuste dá γ ≈ 0 e o modelo vira o GARCH(1,1) — por isso o GJR é o padrão. Estimação por
+**quase-máxima verossimilhança gaussiana** (`−½·Σ[ln h_t + ε_t²/h_t]`, h₀ = variância amostral), com
+**Nelder-Mead determinístico escrito igual nos dois motores**, numa parametrização sem restrições que garante
+ω > 0, α, γ, β ≥ 0 e persistência < 0,999 (`x0`: log da variância de longo prazo; `x1`: logística da persistência;
+`x2`, `x3`: frações de choque e de assimetria). Dois pontos iniciais (persistência 0,97 e 0,90) e reinícios a
+partir do melhor ponto evitam que o otimizador pare cedo (num caso real, a primeira versão parava na borda
+p = 0,999 e dava vol de longo prazo de 150%); em 80 séries testadas o ajuste coincide com o ótimo do scipy até
+10⁻¹³. Tempo: 0,05–0,9 s em Python e menos no navegador — o site ajusta o GARCH na hora, no Web Worker, para o
+período e a ação escolhidos (inclusive CSV).
+
+Grandezas derivadas (painel de vol):
+
+| Grandeza | Fórmula | BBDC4, 28/10/2026 |
+|---|---|---|
+| Persistência p | α + γ·κ + β, κ = média de z²·1[z<0] dos resíduos (≈ 0,5) | 0,970 |
+| Vol de hoje | √(252·h(T+1)) | 114,7% |
+| Vol de longo prazo | √(252·ω/(1 − p)) | 37,0% |
+| Vol média prevista para o prazo N | √(252·[v_L + (h − v_L)·(1 − p^N)/(N·(1 − p))]) | 82,0% (63 pregões) |
+| Meia-vida | ln(0,5)/ln(p) pregões | 23 |
+| Vol realizada (comparação) | desvio dos últimos 63 log-retornos × √252 | 63,3% |
+
+**FHS — Filtered Historical Simulation** (Barone-Adesi, Giannopoulos & Vosper, 1999), método padrão do Monte
+Carlo. Os **choques padronizados** `z_t = ε_t/√h_t` (re-normalizados para média 0 e desvio 1) são os "sustos"
+reais da ação sem o nível de vol da época; a máxima e a mínima de cada dia também são padronizadas
+(`u_t = ln(H_t/C_t)/√h_t`, `d_t = ln(L_t/C_t)/√h_t`). Cada caminho parte de `h = h(T+1)` e, a cada dia:
+
+```
+sorteia um dia q do histórico (i.i.d.)          e = √h · z_q
+ln S += μ_d − ½·k²·h + k·e                       μ_d = ln(1 + μ)/252  ⇒  E[S_T] ≈ (1 + μ)^(N/252)
+máxima = ln S + k·√h·u_q   ·   mínima = ln S + k·√h·d_q
+h ← ω + (α + γ·1[e < 0])·e² + β·h
+```
+
+`k` é a escala de vol da grade de cenários (a dinâmica de h não muda; a vol média do caminho é multiplicada por
+k). Com o drift "histórico", `μ_d = média(lr) + ½·k²·var(lr)`. Racional: o FHS combina a **vol condicional** do
+GARCH (o nível de hoje e a volta gradual à média) com a **distribuição empírica** dos choques (caudas gordas e
+assimetria reais), sem supor normalidade. Com α = γ = β = 0 ele vira um bootstrap i.i.d. com vol constante
+(testado). Os sorteios usam o **mulberry32 vetorizado** em Python (`rng.integers`), na mesma ordem do JS
+(caminho a caminho, dia a dia): Python e JS dão **os mesmos caminhos** (S_T igual a 10⁻¹¹), diferente do
+bootstrap e do GBM, que coincidem só estatisticamente.
+
+Efeito no exemplo padrão (Collar KI 100/106/112, 3 meses, BBDC4, 28/10/2026, drift CDI, 10.000 caminhos):
+
+| Método | Vol usada | P(lucro) | P(> CDI de hoje) | P(barreira) | Saída antecipada (dia mediano) |
+|---|---|---|---|---|---|
+| Bootstrap em blocos | 33,7% (média do período) | 55,5% | 47,1% | 45,6% | — |
+| **FHS-GJR (padrão)** | 82,0% (prevista para o prazo) | 47,5% | 43,6% | 62,0% | 50,2% (14 pregões) |
+
+**Saída antecipada com GARCH** (modo de marcação padrão). No histórico, a vol de marcação no dia k é a vol média
+prevista para o prazo restante a partir da variância daquele dia — `√(252·termo(h_k, N − k))` + adicional —, com
+h_k calculada só com dados até o dia (os parâmetros são os do período inteiro). No Monte Carlo FHS, cada caminho
+guarda a própria variância simulada e é marcado com ela. No exemplo, a saída antecipada no histórico passa de
+53,4% (vol móvel 63d) para 47,7% (GARCH), com dia mediano 39.
+
+**Painel de calibração walk-forward** ([`estruturadas/calibration.py`](estruturadas/calibration.py),
+`engine/calib.js`; botão "Testar calibração" na página Monte Carlo, com barra de progresso no Worker). A cada 10
+pregões, a partir de 504 pregões de histórico (e pelo menos N + 252): usa **só os dados até a data t**, estima
+P(lucro), P(> CDI) e P(barreira) com o método e as premissas escolhidos (1.000 caminhos; GARCH reestimado a cada
+252 pregões e, entre uma estimação e outra, os mesmos parâmetros aplicados aos dados novos; CDI da data como
+régua) e compara com o que aconteceu na janela [t, t+N] (caminho real, CDI realizado). Régua de comparação: o
+**chute fixo** (climatologia) — a frequência do evento nas janelas que já tinham terminado em t.
+
+```
+Brier = média[(p − y)²]          ganho = 1 − Brier_modelo / Brier_chute          (y = 0/1)
+```
+
+Diagrama de confiabilidade: previsões agrupadas em faixas de 10 p.p. × frequência realizada em cada faixa.
+Resultado no Collar KI 3m (362 datas, 2012–2026):
+
+| Ação | Método | Ganho: lucro | Ganho: > CDI | Ganho: barreira |
+|---|---|---|---|---|
+| BBDC4 | FHS-GJR | +1,0% | +2,1% | +4,1% |
+| BBDC4 | Bootstrap | −0,1% | +0,9% | +2,2% |
+| PETR4 | FHS-GJR | +2,9% | +2,2% | +7,0% |
+| PETR4 | Bootstrap | +1,9% | +1,2% | +4,5% |
+| VALE3 | FHS-GJR | +0,9% | +3,2% | +7,7% |
+| VALE3 | Bootstrap | +0,2% | +3,3% | +5,1% |
+
+O FHS-GJR supera o bootstrap e, por pouco, o chute fixo; o ganho é pequeno para direção e maior para barreira
+(vol é previsível no curto prazo; direção, quase nada). GARCH simétrico e GJR empatam na média (o GJR foi
+mantido como padrão por incluir o GARCH como caso particular). Como as janelas vizinhas se sobrepõem (≈ 57
+períodos independentes em 3 meses), diferenças pequenas de Brier são ruído — o painel diz isso ao usuário.
 
 ## 5. Presets e fórmulas do payoff
 
@@ -587,12 +692,14 @@ Actions), **JSON** (dados, lâminas e fixtures) e **TOML/INI** (configurações)
 | [`presets.py`](estruturadas/presets.py) | 9 estruturas pré-definidas, fórmulas e textos em linguagem simples | `booster`, `collar`, `collar_ki`, `forward_knock_out`, `trava_alta`, `trava_baixa`, `straddle`, `strangle`, `protecao_total_bbdc4`, `PRESETS`, `describe` |
 | [`pricing.py`](estruturadas/pricing.py) | Black-Scholes (escalar e vetorizado); fórmula fechada de barreira; Monte Carlo neutro ao risco com antitéticas e BGK; custo líquido; solver de custo zero | `bs_price`, `bs_price_vec`, `barrier_price`, `gbm_paths`, `make_mc_context`, `mc_price_leg`, `price_structure`, `solve_zero_cost` |
 | [`data.py`](estruturadas/data.py) | Preços (yfinance, CSV), ajuste por proventos, vol histórica, Selic/CDI (API SGS), calendário de pregões | `normalize_ticker`, `load_prices_yf`, `parse_price_csv`, `historical_vol`, `fetch_selic_meta`, `fetch_cdi_daily`, `cdi_factor_on_index`, `b3_holidays`, `previous_business_day`, `count_trading_days`, `term_from_dates` |
-| [`backtest.py`](estruturadas/backtest.py) | Janelas históricas (com ajuste ao CDI de hoje), bootstrap em blocos com máxima/mínima, GBM, drift controlado, grade de cenários, ex-post | `historical_windows`, `regime_factor`, `run_historical`, `ohlc_log_returns`, `drift_annual`, `bootstrap_ohlc_paths`, `bootstrap_drift_daily`, `gbm_drift_daily`, `run_monte_carlo`, `run_scenarios`, `run_ex_post` |
+| [`garch.py`](estruturadas/garch.py) | GARCH(1,1)/GJR-GARCH por quase-máxima verossimilhança (Nelder-Mead igual ao do JS), previsões de vol, painel de vol, caminhos FHS | `fit_garch`, `filtered`, `garch_filter`, `nelder_mead`, `expected_var`, `term_var`, `term_vol`, `vol_panel`, `fhs_drift_daily`, `fhs_paths`, `GarchFit` |
+| [`calibration.py`](estruturadas/calibration.py) | Painel de calibração walk-forward: Brier do modelo × chute fixo, diagrama de confiabilidade | `walk_forward`, `CalibrationResult` (`brier`, `reliability`) |
+| [`backtest.py`](estruturadas/backtest.py) | Janelas históricas (com ajuste ao CDI de hoje), Monte Carlo FHS-GARCH (padrão), bootstrap em blocos com máxima/mínima, GBM, drift controlado, grade de cenários, ex-post | `historical_windows`, `regime_factor`, `run_historical`, `ohlc_log_returns`, `drift_annual`, `bootstrap_ohlc_paths`, `bootstrap_drift_daily`, `gbm_drift_daily`, `run_monte_carlo`, `run_scenarios`, `run_ex_post` |
 | [`metrics.py`](estruturadas/metrics.py) | Estatísticas (com IC por block bootstrap e CVaR), tabela comparativa, quadro de rentabilidade, métricas da saída antecipada | `summarize`, `block_bootstrap_ci`, `cvar`, `comparison_table`, `default_variations`, `profitability_table`, `summarize_exit`, `exit_table`, `exit_by_cdi_regime` |
-| [`rng.py`](estruturadas/rng.py) | Gerador mulberry32 idêntico ao do JS (ICs iguais nos dois motores) | `Mulberry32` |
-| [`early_exit.py`](estruturadas/early_exit.py) | Saída antecipada: marcação diária a modelo, calibração, regra do gatilho; histórico, Monte Carlo e ex-post | `EarlyExitConfig`, `structure_value`, `rolling_vol`, `cdi_rate_series`, `simulate_exit`, `run_historical_exit`, `run_mc_exit`, `run_ex_post_exit` |
+| [`rng.py`](estruturadas/rng.py) | Gerador mulberry32 idêntico ao do JS (ICs e caminhos FHS iguais nos dois motores), também vetorizado | `Mulberry32`, `uniforms`, `integers` |
+| [`early_exit.py`](estruturadas/early_exit.py) | Saída antecipada: marcação diária a modelo (vol GARCH, móvel ou fixa), calibração, regra do gatilho; histórico, Monte Carlo e ex-post | `EarlyExitConfig`, `structure_value`, `garch_variance`, `rolling_vol`, `cdi_rate_series`, `simulate_exit`, `run_historical_exit`, `run_mc_exit`, `run_ex_post_exit` |
 | [`io.py`](estruturadas/io.py) | Import/export de lâminas em JSON (aceita nomes em pt e en) | `dumps`, `loads`, `save`, `load` |
-| [`charts.py`](estruturadas/charts.py) | Gráficos Plotly com separadores brasileiros | `payoff_chart`, `histogram_chart`, `windows_timeseries_chart`, `price_chart`, `ex_post_chart`, `mc_paths_chart` |
+| [`charts.py`](estruturadas/charts.py) | Gráficos Plotly com separadores brasileiros | `payoff_chart`, `histogram_chart`, `windows_timeseries_chart`, `price_chart`, `ex_post_chart`, `mc_paths_chart`, `exit_days_chart`, `vol_chart`, `reliability_chart` |
 | [`formatting.py`](estruturadas/formatting.py) | Números no formato 1.234,56 | `fmt_num`, `fmt_pct`, `fmt_brl`, `fmt_level` |
 
 ### 6.2 App Streamlit — [`app.py`](app.py)
@@ -620,10 +727,12 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 | `assets/js/engine/presets.js` | Porta de `presets.py` (textos em HTML). |
 | `assets/js/engine/pricing.js` | Black-Scholes (normal de Hart/West), gerador mulberry32 + Box-Muller, GBM antitético resumido, preço por perna, solver de Brent. |
 | `assets/js/engine/backtest.js` | Calendário B3, preparação de preços, fator do CDI, janelas históricas, bootstrap, GBM (guarda 2.000 caminhos completos), ex-post, métricas, quadro de rentabilidade. |
-| `assets/js/engine/early.js` | Porta de `early_exit.py`: fórmula de barreira, marcação diária calibrada, regra de saída, histórico, Monte Carlo, ex-post e métricas. |
-| `assets/js/worker.js` | Web Worker que executa `price`, `solve`, `hist` e `mc` fora da thread da página. |
+| `assets/js/engine/garch.js` | Porta de `garch.py`: ajuste GARCH/GJR (Nelder-Mead), previsões, painel de vol e Monte Carlo FHS. |
+| `assets/js/engine/early.js` | Porta de `early_exit.py`: fórmula de barreira, marcação diária calibrada (vol GARCH, móvel ou fixa), regra de saída, histórico, Monte Carlo, ex-post e métricas. |
+| `assets/js/engine/calib.js` | Porta de `calibration.py`: teste walk-forward, Brier e diagrama de confiabilidade. |
+| `assets/js/worker.js` | Web Worker que executa `price`, `solve`, `hist`, `mc`, `scen`, `hexit`, `mcexit` e `calib` (com avisos de progresso) fora da thread da página. |
 | `assets/js/core.js` | Formatação, estado (persistido em `localStorage`, chave `es:state`), carga de dados, parser de CSV, chamada ao Worker (com fallback local) e orquestração/caches dos cálculos. |
-| `assets/js/charts.js` | Gráficos ECharts: payoff, histograma, janelas, preço, ex-post e caminhos do MC. |
+| `assets/js/charts.js` | Gráficos ECharts: payoff, histograma, janelas, preço, ex-post, caminhos do MC, saída antecipada, vol condicional e diagrama de confiabilidade. |
 | `assets/js/params.js` | Barra de parâmetros e "Mais opções". |
 | `assets/js/views/*.js` | Páginas: `estrutura`, `backtest` (+ utilitários compartilhados), `montecarlo`, `expost`, `metodologia`. |
 | `assets/js/app.js` | Roteador por hash (`#/estrutura` etc.), cabeçalho e rodapé. |
@@ -633,8 +742,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 
 | Arquivo | Linguagem | Função |
 |---|---|---|
-| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py) | Python (pytest) | 66 testes do motor Python |
-| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 16 testes do motor JS, incluindo comparação com o Python |
+| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py), [`test_garch.py`](tests/test_garch.py) | Python (pytest) | 73 testes do motor Python |
+| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 20 testes do motor JS, incluindo comparação com o Python |
 | [`scripts/pesquisa/`](scripts/pesquisa/) | Python | Experimentos da revisão metodológica (walk-forward, regime de juros) — referência, não produção |
 | [`.github/workflows/pages.yml`](.github/workflows/pages.yml) | YAML | Testes + dados + deploy no GitHub Pages |
 | [`.streamlit/config.toml`](.streamlit/config.toml) | TOML | Tema e servidor do Streamlit |
@@ -664,8 +773,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 ## 8. Testes e validação cruzada Python × JS
 
 ```bash
-pytest                                   # 66 testes do motor Python
-node --test tests/js/engine.test.mjs     # 16 testes do motor JS
+pytest                                   # 73 testes do motor Python
+node --test tests/js/engine.test.mjs     # 20 testes do motor JS
 python scripts/make_js_fixtures.py       # regenera as referências após mudar o motor Python
 ```
 
@@ -687,13 +796,20 @@ BGK aumenta o preço de knock-in; solver com |custo| < 10⁻⁶ e caso sem solu�
 round-trip de JSON (exportar → importar → payoff idêntico). Saída antecipada: paridade in + out = vanilla
 da fórmula fechada em 8 casos (call/put × alta/baixa × strike acima/abaixo da barreira); fórmula + BGK × Monte Carlo diário; convergência
 da marcação ao payoff perto do vencimento; regras de gatilho, delay, carência, spread e vencimento em casos
-determinísticos; calibração no dia 0; histórico, Monte Carlo e ex-post.
+determinísticos; calibração no dia 0; histórico, Monte Carlo e ex-post. GARCH/FHS (Fase 2): mulberry32 vetorizado
+igual ao escalar; recuperação dos parâmetros de uma série GJR simulada; ajuste igual ao ótimo do scipy, inclusive
+com um choque enorme no fim da série; vol do prazo = média das previsões diárias; FHS com α = γ = β = 0 = bootstrap
+i.i.d.; E[S_T] ≈ (1 + μ)^(N/252); choque no fim da série aumenta a vol e a P(barreira); saída antecipada com vol
+GARCH e volta automática à vol móvel em histórico curto; calibração (datas, chute fixo e realizado).
 
 **Validação cruzada:** `make_js_fixtures.py` grava payoffs de todos os presets em caminhos aleatórios
 (fechamento e intradiário), perfis no vencimento, quadros de rentabilidade, preços de Black-Scholes, backtests
 históricos em série sintética, ex-posts, casos de calendário e a saída antecipada (fórmulas de barreira,
-marcação, vol móvel, taxa do CDI, dias de gatilho e de saída e retornos em 5 configurações, além do ex-post).
-O teste JS exige igualdade até 10⁻¹⁰ (10⁻⁹ nos retornos da saída antecipada).
+marcação, vol móvel, taxa do CDI, dias de gatilho e de saída e retornos em 5 configurações, além do ex-post),
+a Fase 1 (gerador, ICs, ajuste de regime) e a Fase 2 (parâmetros do GARCH e do GJR, filtro e resíduos, painel de
+vol, caminhos FHS com os mesmos sorteios, saída antecipada marcada com GARCH e o teste walk-forward). O teste JS
+exige igualdade até 10⁻¹⁰ (10⁻⁹ nos retornos da saída antecipada); os parâmetros do GARCH, que saem de otimizadores
+independentes, até 10⁻⁵, e as previsões da calibração até alguns caminhos.
 
 ## 9. Como rodar, publicar e atualizar
 
@@ -801,9 +917,12 @@ Atalho: o preset **Proteção Total (BBDC4)** já traz essa tabela, a ação e a
 
 ### Premissas e limitações
 
-- **Baixa capacidade preditiva para direção.** Em testes walk-forward (2012–2026), as probabilidades de
-  lucro/superar o CDI não foram mais precisas que a frequência histórica; o modelo é mais útil para comparar
-  estruturas, dimensionar o risco de barreira e visualizar a distribuição de resultados.
+- **Baixa capacidade preditiva para direção.** Em testes walk-forward (2012–2026), o FHS-GARCH melhorou o
+  Brier do chute fixo em só 1%–3% nas probabilidades de lucro/superar o CDI (4%–8% na de barreira); o modelo é
+  mais útil para comparar estruturas, dimensionar o risco de barreira e visualizar a distribuição de resultados.
+- **O GARCH reage forte a choques extremos.** Logo depois de um crash, a vol de hoje passa de 100% a.a. e a
+  P(barreira) sobe bastante; a vol implícita da mesa pode estar abaixo disso (os cenários de vol ×0,8 mostram a
+  sensibilidade). Os parâmetros do GARCH usam o período inteiro carregado.
 - **Passado não garante futuro.** Janelas sobrepostas são fortemente correlacionadas: a amostra efetiva é
   muito menor que o número de janelas.
 - Os parâmetros em % são aplicados igualmente em todas as janelas: a estrutura **não é reprecificada** com a
@@ -821,9 +940,8 @@ Atalho: o preset **Proteção Total (BBDC4)** já traz essa tabela, a ação e a
 
 ### Roadmap
 
-- **Fase 2 da revisão metodológica:** Monte Carlo FHS-GARCH (vol condicional, com variante assimétrica GJR)
-  como padrão, painel de volatilidade, marcação da saída antecipada com a vol do GARCH e painel de calibração
-  walk-forward (Brier do modelo × chute climatológico, diagrama de confiabilidade).
+- Itens opcionais da revisão: bootstrap estacionário com bloco automático (Politis & White); GARCH com
+  resíduos t de Student; comparação com um benchmark "ação + CDI com o mesmo delta".
 - Reprecificar a estrutura em cada janela histórica com a vol e os juros da época.
 - Vol implícita e skew no modo Teórico; dividendos discretos.
 - Monitoramento intradiário no Monte Carlo com ponte browniana.

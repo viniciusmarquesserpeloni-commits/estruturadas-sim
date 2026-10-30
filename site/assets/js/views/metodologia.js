@@ -48,16 +48,36 @@ só com opções:   retorno = valor final / c − 1   (exige c &gt; 0)</span>
 
         <h3>5. Monte Carlo (complemento)</h3>
         <ul>
-          <li><b>Bootstrap em blocos</b> (padrão): sorteia blocos consecutivos (≈ 20 dias) de dias reais — fechamento, máxima e mínima juntos
-          (barreiras intradiárias usam os extremos sorteados) — e os encadeia; preserva caudas gordas e parte da aglomeração de volatilidade.</li>
+          <li><b>FHS-GARCH</b> (padrão; <i>Filtered Historical Simulation</i>, Barone-Adesi, Giannopoulos &amp; Vosper, 1999): estima-se a vol de
+          cada dia do histórico por um <b>GJR-GARCH(1,1)</b> (ou GARCH(1,1)), por máxima verossimilhança gaussiana; dividindo cada retorno pela vol
+          do seu dia, obtêm-se os <b>choques padronizados</b> — os "sustos" reais da ação, sem o nível de vol da época. A simulação parte da
+          <b>vol de hoje</b> e, a cada dia, sorteia um choque do histórico (com a máxima e a mínima daquele dia, também padronizadas) e atualiza
+          a vol pela mesma equação: cada caminho reage aos próprios choques e volta à média de longo prazo no ritmo da meia-vida. No GJR, quedas
+          aumentam a vol mais do que altas (efeito alavancagem).</li>
+          <li><b>Bootstrap em blocos</b>: sorteia blocos consecutivos (≈ 20 dias) de dias reais — fechamento, máxima e mínima juntos
+          (barreiras intradiárias usam os extremos sorteados) — e os encadeia; preserva caudas gordas e parte da aglomeração de volatilidade,
+          mas usa a vol média do período, não a de hoje.</li>
           <li><b>GBM</b>: caminhos log-normais com a vol histórica (barreira intradiária pela correção de Broadie-Glasserman-Kou).</li>
           <li><b>Retorno esperado da ação</b>: <b>CDI (padrão, visão neutra)</b>, CDI + prêmio (5 p.p.), zero, média histórica ou personalizado.
           No bootstrap, troca-se a média dos log-retornos pelo drift escolhido: <code>lr* = (lr − média) + [ln(1+μ) − σ²/2]/252</code>, de modo que
-          E[S<sub>T</sub>] ≈ (1+μ)^(N/252). A média histórica é pouco confiável: erro padrão ≈ σ/√anos (≈ ±8 p.p. a.a. em BBDC4).</li>
+          E[S<sub>T</sub>] ≈ (1+μ)^(N/252). A média histórica é pouco confiável: erro padrão ≈ σ/√anos (≈ ±8 p.p. a.a. em BBDC4). No FHS, o
+          log-retorno de cada dia é <code>ln(1+μ)/252 − h/2 + √h·z*</code>, com o mesmo E[S<sub>T</sub>].</li>
           <li><b>Sensibilidade às premissas</b>: o erro de sorteio é desprezível; a incerteza que importa é de premissa. Roda-se uma grade de 9
-          cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol {0,8; 1,0; 1,2} × a vol de base —, com os mesmos números aleatórios; as
-          faixas dos indicadores mostram o mínimo e o máximo entre eles.</li>
+          cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol {0,8; 1,0; 1,2} × a vol de base (no FHS, a vol média prevista para o
+          prazo) —, com os mesmos números aleatórios; as faixas dos indicadores mostram o mínimo e o máximo entre eles.</li>
         </ul>
+        <span class="formula">h(t+1) = ω + (α + γ·1[ε(t) &lt; 0])·ε(t)² + β·h(t)          (GARCH(1,1): γ = 0)
+choque padronizado: z = ε / √h
+persistência p = α + γ·κ + β     vol de longo prazo = √(252·ω/(1 − p))     meia-vida = ln(0,5)/ln(p) pregões
+vol média prevista para N pregões: v_L + (h − v_L)·(1 − p^N)/(N·(1 − p))</span>
+        <p><b>Painel de volatilidade.</b> Mostra a vol de hoje (previsão para o próximo pregão), a vol média prevista para o prazo (a usada no
+        Monte Carlo), a de longo prazo, a meia-vida e a vol realizada de 63 pregões, com o gráfico da vol condicional nos últimos 3 anos.</p>
+        <p><b>Calibração walk-forward (botão "Testar calibração").</b> A cada 10 pregões, depois de 2 anos de dados, o simulador estima P(lucro),
+        P(&gt; CDI) e P(barreira) <b>só com os dados até aquela data</b> (GARCH reestimado a cada 252 pregões, CDI da data como régua, 1.000
+        caminhos) e confere o que aconteceu de fato. A régua é o <b>chute fixo</b>: a frequência do evento nas janelas já encerradas até a data.
+        Métrica: <i>Brier score</i>, a média de (probabilidade − resultado 0/1)²; se o do modelo não for menor que o do chute fixo, leia a
+        probabilidade como ordem de grandeza. O diagrama de confiabilidade compara as previsões, agrupadas em faixas de 10 p.p., com a
+        frequência realizada.</p>
 
         <h3>6. Modo ex-post</h3>
         <p>Aplica a estrutura no caminho realmente observado entre a contratação e a apuração. Antes do vencimento, mostra a marcação
@@ -88,14 +108,15 @@ gatilho no dia k        = 1,5 × (CDI acumulado de 0 a k)</span>
           por <code>B·e^(±0,5826·σ·√(1/252))</code> (correção de Broadie-Glasserman-Kou), o que reproduz o Monte Carlo diário dentro do erro
           padrão.</li>
         </ul>
-        <p><b>Volatilidade implícita.</b> Não há histórico público de vol implícita para a maioria das ações. A marcação usa a vol realizada dos
-        últimos 63 pregões (só com dados até o dia) mais um adicional (padrão: 3 pontos), ou a vol da contratação fixa. Para não depender de
+        <p><b>Volatilidade implícita.</b> Não há histórico público de vol implícita para a maioria das ações. A marcação usa a <b>vol média
+        prevista pelo GARCH para o prazo restante</b> (padrão; variância do dia só com dados até ele) mais um adicional (padrão: 3 pontos), a vol
+        realizada dos últimos 63 pregões ou a vol da contratação fixa. No Monte Carlo FHS, cada caminho é marcado com a própria vol simulada. Para não depender de
         acertar o nível exato, a marcação é <b>calibrada ao preço pago</b>: a diferença entre o valor pago e o valor do modelo no dia da
         contratação é somada à marcação e amortizada linearmente até zerar no vencimento. Isso supõe que o preço da lâmina era justo
         naquele momento e acompanha o mercado a partir dali.</p>
         <p><b>Juros importam muito.</b> Com CDI alto, a parte "renda fixa" da estrutura vale menos e a régua de 150% do CDI sobe mais rápido:
         a saída antecipada fica mais rara e mais tardia. Por isso o backtest mostra o resultado separado pelo nível de CDI no início de cada
-        janela. No Monte Carlo, a marcação usa o CDI atual e vol constantes, nos primeiros 2.000 caminhos.</p>
+        janela. No Monte Carlo, a marcação usa o CDI atual (e, no FHS, a vol de cada caminho), nos primeiros 2.000 caminhos.</p>
         <p>A comparação com o CDI considera o período em que o dinheiro ficou de fato aplicado, e o retorno anualizado usa o prazo de cada
         janela. A marcação é uma estimativa: o preço de desmontagem efetivo é o da mesa.</p>
 
@@ -106,16 +127,21 @@ gatilho no dia k        = 1,5 × (CDI acumulado de 0 a k)</span>
           <li>Calendário de pregões: as datas da própria série de preços; para datas futuras, uma aproximação dos feriados da B3.</li>
           <li>Preço padrão: fechamento <b>ajustado por proventos</b> (as lâminas ajustam strikes e barreiras em eventos corporativos); há opção de preço bruto.</li>
           <li>Monitoramento de barreira: <b>fechamento diário</b> (padrão) ou <b>intradiário</b> (máxima para barreiras de alta e mínima para as de baixa;
-          no Monte Carlo, que só gera fechamentos, aplica-se a correção de Broadie-Glasserman-Kou, deslocando a barreira em 0,5826·σ·√Δt).</li>
+          no FHS e no bootstrap, a máxima e a mínima sorteadas junto com o dia; no GBM, a correção de Broadie-Glasserman-Kou, deslocando a
+          barreira em 0,5826·σ·√Δt).</li>
           <li>CDI histórico: série diária do BCB; sem ela, usa-se a taxa informada.</li>
         </ul>
 
         <h3>Limitações</h3>
         <ul>
           <li><b>Passado não garante futuro.</b> As janelas se sobrepõem: a amostra efetiva é muito menor que o número de janelas — daí os ICs.</li>
-          <li><b>Baixa capacidade preditiva para direção.</b> Em testes fora da amostra (walk-forward, 2012–2026), as probabilidades de lucro e de
-          superar o CDI não foram mais precisas que a frequência histórica. O simulador é mais útil para <b>comparar estruturas, dimensionar o risco
-          de barreira e visualizar a distribuição</b> de resultados.</li>
+          <li><b>Baixa capacidade preditiva para direção.</b> Em testes fora da amostra (walk-forward, 2012–2026, Collar Knock In 3m em BBDC4, PETR4
+          e VALE3), o FHS-GARCH melhorou o Brier do chute fixo em só 1%–3% nas probabilidades de lucro e de superar o CDI, e em 4%–8% na de
+          barreira: a vol é previsível no curto prazo, a direção quase nada. O simulador é mais útil para <b>comparar estruturas, dimensionar o
+          risco de barreira e visualizar a distribuição</b> de resultados; o painel de calibração refaz o teste para a estrutura escolhida.</li>
+          <li>O GARCH reage forte a choques extremos: logo depois de um dia como 26/10/2026 (BBDC4 −24,5%), a vol de hoje passa de 100% a.a. e a
+          P(barreira) sobe bastante. É o comportamento desejado ("contratar agora"), mas a vol implícita da mesa pode estar abaixo disso; os
+          cenários de vol ×0,8 mostram a sensibilidade.</li>
           <li>O ajuste ao CDI de hoje preserva o excesso de retorno da ação sobre o CDI de cada época: o histórico ainda carrega o prêmio de risco do
           período. O Monte Carlo com retorno esperado = CDI é a visão neutra.</li>
           <li>Os parâmetros em % são aplicados igualmente em todas as janelas: a estrutura <b>não é reprecificada</b> com a vol e os juros de cada época.</li>

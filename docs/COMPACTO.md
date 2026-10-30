@@ -1,7 +1,7 @@
 # Compacto — Simulador de Operações Estruturadas (para colar em um chat novo)
 
 > Resumo de 1 página. Detalhes: `docs/CONTEXTO_DO_PROJETO.md` (decisões, armadilhas, comandos) e `README.md`
-> (todas as fórmulas). Atualizado em 28/10/2026.
+> (todas as fórmulas). Atualizado em 29/10/2026.
 
 **O que é:** simulador/backtest de operações estruturadas com opções sobre ações da B3, na linguagem das lâminas
 da mesa ("Composição da Estratégia", "Quadro de rentabilidade", Knock Up/Down and In/Out). Mede a chance de
@@ -40,19 +40,21 @@ barreira, vol realizada 63d + 3 pts, **calibrada ao preço pago** (offset do dia
 resultado (histórico separado por CDI ≤ 8%, 8–12%, > 12%).
 
 **Revisão metodológica** (`docs/REVISAO_METODOLOGICA.md`): pergunta = "chance de dar certo se contratar **agora**".
-**Fase 1 feita e publicada** (aguardando revisão do usuário antes da Fase 2): CDI de hoje como régua (CDI efetivo, editável) e
-ajuste de regime nas janelas, IC 95% por block bootstrap (mulberry32 igual nos dois motores), drift do MC = CDI
-(padrão) inclusive no bootstrap, grade de cenários drift × vol, CVaR 5%, bootstrap com máxima/mínima, padrão
-Collar KI 100/106/112 em 3 meses com vértices 3/6/9/12m. **Fase 2 pendente:** FHS-GARCH/GJR, painel de vol,
-painel de calibração walk-forward.
+**Fase 1 (publicada):** CDI de hoje como régua (CDI efetivo, editável) e ajuste de regime nas janelas, IC 95% por
+block bootstrap (mulberry32 igual nos dois motores), drift do MC = CDI (padrão) inclusive no bootstrap, grade de
+cenários drift × vol, CVaR 5%, bootstrap com máxima/mínima, padrão Collar KI 100/106/112 em 3 meses com vértices
+3/6/9/12m. **Fase 2 (feita em 29/10/2026):** Monte Carlo **FHS-GJR** como padrão (GARCH ajustado na hora, Nelder-Mead
+igual nos dois motores, mesmos caminhos), painel de vol, saída antecipada marcada com a vol do GARCH, painel de
+calibração walk-forward (Brier × chute fixo, diagrama de confiabilidade).
 
 **Números de referência (Proteção Total BBDC4, 19/11/2025 → 25/11/2026, 249 pregões):** quadro 4,10 / 6,10 /
 42,00 / 57,00% (lâmina arredonda 42/57) · histórico: P(lucro) 100%, P(>CDI) 35%, barreira 27,5% · saída
 antecipada: histórico 69% (dia mediano 62), MC 22% (dia 224) · operação real a 0,59 p.p. do gatilho em
 22/10/2026.
 
-**Estado:** tudo no GitHub até `7de331d` (Fase 1 da revisão), deploy no ar (conferir algo só local com
-`git log origin/main..`). Testes: 66 pytest + 16 node. Mercado: Ibovespa −13,9% em 26/10/2026 (vol muito alta). Pendências do usuário: ativar 2FA no GitHub até 23/11/2026; descobrir o spread real de saída.
+**Estado:** no GitHub até `7de331d`; o commit de docs `0cfa942` e a Fase 2 estão só locais até o usuário autorizar o push (conferir
+`git log origin/main..`). Testes: 73 pytest + 20 node. Pedido em aberto: PDF didático com o layout do simulador
+e passo a passo com imagens. Mercado: Ibovespa −13,9% em 26/10/2026 (vol muito alta). Pendências do usuário: ativar 2FA no GitHub até 23/11/2026; descobrir o spread real de saída.
 
 **Comandos:** `.venv/Scripts/python -m pytest -q` · `node --test tests/js/engine.test.mjs` ·
 `.venv/Scripts/python scripts/make_js_fixtures.py` (após mudar o motor Python) ·
