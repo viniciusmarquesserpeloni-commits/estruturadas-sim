@@ -156,7 +156,7 @@
       <div class="card"><div class="kpi-strip">${UI.kpis(sm, st.invested, "janelas")}</div>
         <div class="card-note">${res.regimeAdjust ? `Caminhos re-ancorados no <b>CDI de hoje (${F.pct(ctx.rateAnnual, 2, false)} a.a.)</b>, preservando o excesso de retorno da ação sobre o CDI de cada época — “e se eu contratasse agora?”.` : `Ajuste ao CDI de hoje desligado: cada janela usa os juros da sua época.`}
         Janelas vizinhas se sobrepõem: a amostra efetiva é de ≈ ${F.int(sm.nEff)} janelas independentes, daí as faixas (IC 95% por block bootstrap).
-        Em testes fora da amostra, a probabilidade de direção não foi mais precisa que a frequência histórica: use para comparar estruturas e dimensionar o risco de barreira.</div></div>
+        Em testes fora da amostra, a probabilidade de direção foi só um pouco mais precisa que a frequência histórica (confira no teste de calibração, na página Monte Carlo): use para comparar estruturas e dimensionar o risco de barreira.</div></div>
       <div class="card" style="margin-top:16px"><div class="card-h"><h3>Retorno de cada janela pela data de início</h3><span class="sub">cor = lucro / sem lucro · triângulo = barreira acionada</span></div>
         <div class="card-b"><div class="chart tall" id="b-ts"></div></div>
         <div class="card-note">Janelas vizinhas compartilham quase todo o caminho de preços: os pontos não são observações independentes.</div></div>

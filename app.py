@@ -703,8 +703,8 @@ with tab_hist:
                         f"({fmt_pct(rate_annual)} a.a.), preservando o excesso de retorno da ação sobre o CDI de cada época. "
                         if hist_res.meta.get("regime_adjust") else "Ajuste ao CDI de hoje desligado: CDI da época. ")
                        + f"Amostra efetiva ≈ {hs['n_effective']} janelas independentes. Em testes fora da amostra, a "
-                         "probabilidade de direção não foi mais precisa que a frequência histórica: use para comparar "
-                         "estruturas e dimensionar o risco de barreira.")
+                         "probabilidade de direção foi só um pouco mais precisa que a frequência histórica (confira na "
+                         "calibração, aba Monte Carlo): use para comparar estruturas e dimensionar o risco de barreira.")
             if hs["barreiras"]:
                 st.caption("Barreira acionada em: " + " · ".join(
                     f"{lbl}: **{fmt_pct(v, 1)}** das janelas" for lbl, v in hs["barreiras"].items()))
