@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-for (const f of ["legs", "presets", "pricing", "backtest", "early"]) require(`../../site/assets/js/engine/${f}.js`);
+for (const f of ["legs", "presets", "pricing", "garch", "backtest", "early", "calib"]) require(`../../site/assets/js/engine/${f}.js`);
 const E = globalThis.Estr;
 const FX = JSON.parse(readFileSync(new URL("./fixtures.json", import.meta.url), "utf-8"));
 
@@ -135,7 +135,7 @@ test("JSON: ida e volta mantém o payoff", () => {
 
 /* ---------------- Saída antecipada ---------------- */
 const jsCfg = (c) => ({ trigger: c.trigger, exitSpread: c.exit_spread, delay: c.delay, minDays: c.min_days, volMode: c.vol_mode,
-  volWindow: c.vol_window, volAdd: c.vol_add, mcPaths: c.mc_paths, calibrate: c.calibrate });
+  volModel: c.vol_model, volWindow: c.vol_window, volAdd: c.vol_add, mcPaths: c.mc_paths, calibrate: c.calibrate });
 
 test("saída antecipada: fórmulas de barreira, marcação e séries iguais ao Python", () => {
   const S = FX.saida;
@@ -223,7 +223,7 @@ test("fase 1: histórico com ajuste de regime e saída antecipada no CDI de hoje
     for (const [k, v] of Object.entries(fx.ci)) closeArr(sm.ci[k], v, 1e-12, `${fx.preset} IC ${k}`);
     const sx = F1.saida_regime.find((x) => x.preset === fx.preset);
     if (!sx) continue;
-    const ee = E.runHistoricalExit(s, P, fx.N, 0, {}, F, res.ret, fx.monitoring, fx.extra, F1.cdi_ref, true);
+    const ee = E.runHistoricalExit(s, P, fx.N, 0, { volMode: "rolling" }, F, res.ret, fx.monitoring, fx.extra, F1.cdi_ref, true);
     closeArr(Array.from(ee.exitDay), sx.dia_saida, 0, fx.preset + " dia saída (ajustado)");
     closeArr(ee.retFinal, sx.retorno_final, 1e-9, fx.preset + " retorno final (ajustado)");
     closeArr(ee.cdiPeriod, sx.cdi_periodo, 1e-12, fx.preset + " CDI do período (ajustado)");
@@ -252,4 +252,84 @@ test("fase 1: drift no bootstrap, máxima/mínima sorteadas e grade de cenários
   assert.equal(g.length, 9);
   for (const d of E.SCENARIO_DRIFTS) { const r = g.filter((x) => x.drift === d); assert.ok(r[0].p_barreira <= r[1].p_barreira && r[1].p_barreira <= r[2].p_barreira, d); }
   for (const vs of E.SCENARIO_VOLS) { const r = E.SCENARIO_DRIFTS.map((d) => g.find((x) => x.drift === d && x.volScale === vs)); assert.ok(r[0].p_lucro <= r[1].p_lucro && r[1].p_lucro <= r[2].p_lucro, String(vs)); }
+});
+
+/* ---------------- Fase 2: GARCH/GJR, FHS e calibração ---------------- */
+const F2 = FX.fase2;
+const P2 = () => ({ d: F2.prices.d, c: Float64Array.from(F2.prices.c), h: Float64Array.from(F2.prices.h), l: Float64Array.from(F2.prices.l) });
+const pyFit = (lr, f, model, up = null, dn = null) => E.garchFiltered(lr, f.omega, f.alpha, f.gamma, f.beta, model, up, dn);
+
+test("fase 2: ajuste GARCH/GJR (Nelder-Mead) igual ao Python", () => {
+  const g = E.rng(31);
+  assert.deepEqual(F2.rng_int.map(() => g.int(1000)), F2.rng_int);
+  const { lr, up, dn } = E.ohlcLogReturns(P2());
+  for (const m of ["garch", "gjr"]) {
+    const js = E.garchFit(lr, m, up, dn), py = F2.fits[m];
+    for (const k of ["alpha", "beta", "persistence"]) close(js[k], py[k], 1e-5, `${m} ${k}`);
+    close(js.gamma, py.gamma, 1e-5, `${m} gamma`);
+    close(js.omega / py.omega, 1, 1e-4, `${m} omega`);
+    close(js.loglik, py.loglik, 1e-9, `${m} loglik`);
+    close(js.hNext / py.h_next, 1, 1e-4, `${m} h_next`);
+    // com os parâmetros do Python, o filtro e os resíduos são idênticos
+    const f = pyFit(lr, py, m, up, dn);
+    closeArr(f.h.slice(-30), py.h, 1e-13, `${m} h`);
+    closeArr(f.z.slice(0, 30), py.z, 1e-12, `${m} z`);
+    closeArr(f.up.slice(0, 30), py.up, 1e-12, `${m} up`);
+    close(f.kappa, py.kappa, 1e-12, `${m} kappa`);
+    close(f.loglik, py.loglik, 1e-9, `${m} loglik filtrado`);
+  }
+  assert.ok(F2.fits.gjr.gamma > 0.02, "GJR detecta a assimetria simulada");
+  const g2 = pyFit(lr, F2.fits.gjr, "gjr", up, dn), vp = E.volPanel(g2, lr, 63);
+  for (const k of ["vol_hoje", "vol_longo_prazo", "vol_prazo", "vol_realizada", "meia_vida", "persistencia"]) close(vp[k], F2.panel[k], 1e-10, "painel " + k);
+  for (const [h1, m, v] of F2.term_vol) close(E.termVol(g2, h1, m), v, 1e-12, `vol do prazo ${h1} ${m}`);
+});
+
+test("fase 2: Monte Carlo FHS igual ao Python (mesmos sorteios)", () => {
+  const P = P2(), { lr, up, dn } = E.ohlcLogReturns(P);
+  const g = pyFit(lr, F2.fits.gjr, "gjr", up, dn);
+  for (const fx of F2.mc) {
+    const s = E.PRESETS[fx.preset].build();
+    const r = E.runMonteCarlo(s, P, fx.N, 0, { method: "fhs_garch", nPaths: 3000, drift: fx.drift, cdiAnnual: 0.12, seed: 5, monitoring: fx.monitoring, volScale: fx.scale, garch: g });
+    close(r.sigma, fx.sigma, 1e-12, fx.preset + " sigma");
+    closeArr(r.sT.slice(0, 20), fx.sT, 1e-11, fx.preset + " S_T");
+    closeArr(r.sampleV[0].slice(0, 10), fx.var0, 1e-12, fx.preset + " variância do caminho 0");
+    const sm = E.summarize(r);
+    for (const [k, v] of Object.entries(fx.summary)) close(sm[k], v, 1e-9, `${fx.preset} ${k}`);
+  }
+});
+
+test("fase 2: FHS com α = γ = β = 0 vira bootstrap i.i.d. com vol constante", () => {
+  const P = P2(), { lr } = E.ohlcLogReturns(P);
+  const n = lr.length, m = lr.reduce((a, b) => a + b, 0) / n;
+  let s2 = 0; for (const x of lr) s2 += (x - m) * (x - m); s2 /= n;
+  const g = E.garchFiltered(lr, s2, 0, 0, 0, "garch");
+  for (let i = 1; i < g.h.length; i++) close(g.h[i], s2, 1e-15, "h constante");
+  const N = 30, sum = E.fhsSummary(g, 50, N, 9, 0.0003, 1, 50, false), rng = E.rng(9);
+  for (let i = 0; i < 50; i++) {
+    let x = 0;
+    for (let j = 0; j < N; j++) { x += 0.0003 - 0.5 * s2 + Math.sqrt(s2) * g.z[rng.int(g.z.length)]; close(sum.sample[i][j], Math.exp(x), 1e-12, "caminho iid"); }
+  }
+});
+
+test("fase 2: saída antecipada marcada com GARCH e calibração walk-forward iguais ao Python", () => {
+  const P = P2(), F = Float64Array.from(F2.cdiF);
+  const lrc = new Float64Array(P.c.length - 1);
+  for (let i = 1; i < P.c.length; i++) lrc[i - 1] = Math.log(P.c[i] / P.c[i - 1]);
+  const g = pyFit(lrc, F2.fit_close, "gjr");
+  for (const fx of F2.saida) {
+    const s = E.PRESETS[fx.preset].build(), h = E.runHistorical(s, P, fx.N, 0, fx.monitoring, 0, F);
+    const x = E.runHistoricalExit(s, P, fx.N, 0, {}, F, h.ret, fx.monitoring, 0, null, false, g);
+    closeArr(Array.from(x.exitDay), fx.dia_saida, 0, fx.preset + " dia saída (GARCH)");
+    closeArr(x.retFinal, fx.retorno_final, 1e-9, fx.preset + " retorno (GARCH)");
+  }
+  const c = F2.calib, s = E.PRESETS.collar_ki.build();
+  const res = E.walkForward(s, P, c.N, 0, { method: "fhs_garch", step: c.step, nPaths: c.n_paths, cdiF: F });
+  assert.deepEqual(res.rows.map((r) => r.data), c.datas);
+  for (const k of ["clim_lucro", "clim_cdi", "clim_barreira", "real_lucro", "real_cdi", "real_barreira", "cdi_ref"]) closeArr(res.rows.map((r) => r[k]), c.rows[k], 1e-12, k);
+  // os ajustes do GARCH em cada data podem diferir na 8ª casa (otimizador), então as previsões têm tolerância de poucos caminhos
+  for (const k of ["prev_lucro", "prev_cdi", "prev_barreira"]) closeArr(res.rows.map((r) => r[k]), c.rows[k], 0.011, k);
+  const br = E.calibBrier(res);
+  for (const b of c.brier) { const j = br.find((x) => x.chave === b.chave); close(j.brier_chute, b.brier_chute, 1e-12, "Brier chute " + b.chave); close(j.brier_modelo, b.brier_modelo, 0.01, "Brier modelo " + b.chave); }
+  const rel = E.calibReliability(res, "barreira");
+  assert.equal(rel.reduce((a, r) => a + r.n, 0), res.rows.length);
 });

@@ -8,8 +8,17 @@
   const E = root.Estr;
   const TD = 252, TOL = 1e-9;
   const N_ = (x) => E.cnd(x);
-  E.VOL_MODE_LABELS = { rolling: "Vol realizada móvel + adicional", fixed: "Vol da contratação + adicional (fixa)" };
-  E.EXIT_DEFAULTS = { trigger: 1.5, exitSpread: 0.01, delay: 1, minDays: 0, volMode: "rolling", volWindow: 63, volAdd: 0.03, mcPaths: 2000, calibrate: true };
+  E.VOL_MODE_LABELS = { garch: "Vol GARCH do prazo restante + adicional", rolling: "Vol realizada móvel + adicional", fixed: "Vol da contratação + adicional (fixa)" };
+  E.EXIT_DEFAULTS = { trigger: 1.5, exitSpread: 0.01, delay: 1, minDays: 0, volMode: "garch", volModel: "gjr", volWindow: 63, volAdd: 0.03, mcPaths: 2000, calibrate: true };
+
+  /* Ajuste GARCH sobre os fechamentos (h[i] = variância prevista no fechamento do pregão i para o dia seguinte);
+     null se o histórico for curto (a marcação volta para a vol móvel). */
+  E.garchVariance = function (c, model = "gjr", g = null) {
+    const lr = new Float64Array(c.length - 1);
+    for (let i = 1; i < c.length; i++) lr[i - 1] = Math.log(c[i] / c[i - 1]);
+    try { g = g || E.garchFit(lr, model); } catch (e) { return null; }
+    return g.h.length === lr.length + 1 ? g : null;
+  };
 
   /* Opção com barreira de monitoramento contínuo, sem rebate (Reiner-Rubinstein / Haug). */
   E.barrierPrice = function (kind, barrier, S, K, H, T, r, q, sig) {
@@ -128,9 +137,11 @@
   /* Saída antecipada em todas as janelas históricas (mesmas janelas de runHistorical). */
   /* Com regimeAdjust (e cdiRef): caminhos re-ancorados no CDI de hoje e CDI de hoje no gatilho e na marcação
      (retHold deve vir do runHistorical com o mesmo ajuste). */
-  E.runHistoricalExit = function (s, P, N, cost, cfg, cdiF, retHold, monitoring = "close", extra = 0, cdiRef = null, regimeAdjust = false) {
+  E.runHistoricalExit = function (s, P, N, cost, cfg, cdiF, retHold, monitoring = "close", extra = 0, cdiRef = null, regimeAdjust = false, garch = null) {
     cfg = Object.assign({}, E.EXIT_DEFAULTS, cfg);
     const n = P.c.length - N, rates = E.cdiRateSeries(cdiF), rv = E.rollingVol(P.c, cfg.volWindow).map((v) => v + cfg.volAdd);
+    const g = cfg.volMode === "garch" ? E.garchVariance(P.c, cfg.volModel, garch) : null;
+    const sigAt = (t, i, k) => (g ? E.termVol(g, g.h[i], N - k) + cfg.volAdd : cfg.volMode === "fixed" ? rv[t] : rv[i]);
     const intra = monitoring === "intraday", rows = [], cdiStart = new Float64Array(n), adj = !!(regimeAdjust && cdiRef != null);
     const rRef = adj ? Math.log1p(cdiRef) : 0;
     for (let t = 0; t < n; t++) {
@@ -138,25 +149,28 @@
       const get = (k) => {
         const i = t + k, f = adj ? Math.pow(1 + cdiRef, k / TD) / (cdiF[i] / cdiF[t]) : 1, S = (P.c[i] / base) * f;
         return { S, up: intra ? Math.max((P.h[i] / base) * f, S) : S, down: intra ? Math.min((P.l[i] / base) * f, S) : S,
-          r: adj ? rRef : rates[i], sig: cfg.volMode === "fixed" ? rv[t] : rv[i], cdi: adj ? Math.pow(1 + cdiRef, k / TD) - 1 : cdiF[i] / cdiF[t] - 1 };
+          r: adj ? rRef : rates[i], sig: sigAt(t, i, k), cdi: adj ? Math.pow(1 + cdiRef, k / TD) - 1 : cdiF[i] / cdiF[t] - 1 };
       };
-      rows.push(exitPath(s, N, get, cost, cfg, retHold[t], monitoring, extra, adj ? rRef : rates[t], rv[t]));
+      rows.push(exitPath(s, N, get, cost, cfg, retHold[t], monitoring, extra, adj ? rRef : rates[t], g ? E.termVol(g, g.h[t], N) + cfg.volAdd : rv[t]));
       cdiStart[t] = Math.expm1(rates[t]);
     }
     return pack(rows, retHold, N, { cdiStart, start: P.d.slice(0, n), kind: "historico", cfg });
   };
 
-  /* Saída antecipada nos caminhos completos guardados pelo Monte Carlo (vol e CDI constantes). */
-  /* high/low: máximas e mínimas sorteadas pelo bootstrap (intradiário sem BGK); sem elas, toques pela barreira deslocada. */
-  E.runMcExit = function (s, paths, N, cost, cfg, retHold, sigmaHist, cdiAnnual, monitoring = "close", extra = 0, high = null, low = null) {
+  /* Saída antecipada nos caminhos completos guardados pelo Monte Carlo (CDI constante).
+     high/low: máximas e mínimas sorteadas (bootstrap, FHS; intradiário sem BGK); sem elas, toques pela barreira
+     deslocada. varPaths + garch (FHS): marcação com a vol GARCH do prazo restante de cada caminho. */
+  E.runMcExit = function (s, paths, N, cost, cfg, retHold, sigmaHist, cdiAnnual, monitoring = "close", extra = 0, high = null, low = null, varPaths = null, garch = null, volScale = 1) {
     cfg = Object.assign({}, E.EXIT_DEFAULTS, cfg);
     const m = Math.min(cfg.mcPaths, paths.length), r = Math.log1p(cdiAnnual), sig = sigmaHist + cfg.volAdd;
+    const gv = varPaths && garch && cfg.volMode !== "fixed";
     const hl = monitoring === "intraday" && high && low;
     const hs = monitoring === "intraday" && !hl ? E.BGK_BETA * sigmaHist * Math.sqrt(1 / TD) : 0, eu = Math.exp(hs), ed = Math.exp(-hs);
     const mon = monitoring === "intraday" ? "continuous" : "close", rows = [];
     for (let p = 0; p < m; p++) {
-      const row = paths[p], rh = hl ? high[p] : null, rl = hl ? low[p] : null;
-      const get = (k) => { const S = row[k - 1]; return { S, up: rh ? rh[k - 1] : S * eu, down: rl ? rl[k - 1] : S * ed, r, sig, cdi: Math.pow(1 + cdiAnnual, k / TD) - 1 }; };
+      const row = paths[p], rh = hl ? high[p] : null, rl = hl ? low[p] : null, rv = gv ? varPaths[p] : null;
+      const get = (k) => { const S = row[k - 1]; return { S, up: rh ? rh[k - 1] : S * eu, down: rl ? rl[k - 1] : S * ed, r,
+        sig: rv ? volScale * E.termVol(garch, rv[k - 1], N - k) + cfg.volAdd : sig, cdi: Math.pow(1 + cdiAnnual, k / TD) - 1 }; };
       rows.push(exitPath(s, N, get, cost, cfg, retHold[p], mon, extra, r, sig));
     }
     return pack(rows, retHold, N, { kind: "mc", cfg });
@@ -170,7 +184,9 @@
     const m = Math.min(nTotal, P.c.length - 1 - i0);
     if (m < 1) return null;
     const s0 = P.c[i0], rates = E.cdiRateSeries(cdiF), rv = E.rollingVol(P.c, cfg.volWindow).map((v) => v + cfg.volAdd);
-    const off = offsetOf(s, cost, cfg, nTotal, rates[i0], rv[i0], monitoring), intra = monitoring === "intraday";
+    const g = cfg.volMode === "garch" ? E.garchVariance(P.c, cfg.volModel) : null;
+    const sigAt = (i, k) => (g ? E.termVol(g, g.h[i], nTotal - k) + cfg.volAdd : cfg.volMode === "fixed" ? rv[i0] : rv[i]);
+    const off = offsetOf(s, cost, cfg, nTotal, rates[i0], g ? E.termVol(g, g.h[i0], nTotal) + cfg.volAdd : rv[i0], monitoring), intra = monitoring === "intraday";
     const dates = [], ret = new Float64Array(m), threshold = new Float64Array(m);
     let runMax = -Infinity, runMin = Infinity, trig = -1;
     for (let j = 0; j < m; j++) {
@@ -180,7 +196,7 @@
       dates.push(P.d[i]);
       threshold[j] = cfg.trigger * (cdiF[i] / cdiF[i0] - 1);
       if (k < nTotal) {
-        const v = E.structureValue(s, S, runMax, runMin, (nTotal - k) / TD, rates[i], cfg.volMode === "fixed" ? rv[i0] : rv[i], monitoring) + off * (nTotal - k) / nTotal;
+        const v = E.structureValue(s, S, runMax, runMin, (nTotal - k) / TD, rates[i], sigAt(i, k), monitoring) + off * (nTotal - k) / nTotal;
         ret[j] = E.returnsFromPayoff(v, cost, E.hasStock(s), extra) - cfg.exitSpread;
       } else ret[j] = NaN;
       if (trig < 0 && ret[j] >= threshold[j] && ret[j] > 0 && k >= Math.max(cfg.minDays, 1)) trig = j;

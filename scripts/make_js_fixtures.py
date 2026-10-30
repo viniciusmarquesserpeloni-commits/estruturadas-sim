@@ -51,6 +51,23 @@ def synthetic_prices(n=420, seed=11):
     return pd.DataFrame({"Open": close, "High": high, "Low": low, "Close": close}, index=idx)
 
 
+def garch_prices(n=1300, seed=5):
+    """Série simulada por um GJR-GARCH (α 0,05, γ 0,08, β 0,88; vol média ≈ 32% a.a.) com máxima/mínima."""
+    rng = np.random.default_rng(seed)
+    omega, alpha, gamma, beta = 1.2e-5, 0.05, 0.08, 0.88
+    h, lr, sig = 4e-4, np.empty(n), np.empty(n)
+    for t in range(n):
+        sig[t] = np.sqrt(h)
+        e = sig[t] * rng.standard_normal()
+        lr[t] = 0.0004 + e
+        h = omega + (alpha + gamma * (e < 0)) * e * e + beta * h
+    close = 50 * np.exp(np.cumsum(lr))
+    high = close * np.exp(np.abs(rng.normal(0, 0.6, n)) * sig)
+    low = close * np.exp(-np.abs(rng.normal(0, 0.6, n)) * sig)
+    idx = pd.bdate_range("2019-01-02", periods=n)
+    return pd.DataFrame({"Open": close, "High": high, "Low": low, "Close": close}, index=idx)
+
+
 def main() -> None:
     rng = np.random.default_rng(2024)
     out: dict = {"presets": {}, "bs": [], "historico": [], "calendario": {}, "expost": []}
@@ -131,11 +148,11 @@ def main() -> None:
         v = float(structure_value(pt, np.array([S]), np.array([mx]), np.array([mn]), T, np.array([0.12]),
                                   np.array([0.3]), mon)[0])
         out["saida"]["valor"].append([S, mx, mn, T, mon, v])
-    cases = [("protecao_total", 60, "close", EarlyExitConfig()),
-             ("protecao_total", 60, "close", EarlyExitConfig(calibrate=False, delay=0)),
-             ("collar_ki", 45, "intraday", EarlyExitConfig(min_days=10, exit_spread=0.02, delay=2)),
+    cases = [("protecao_total", 60, "close", EarlyExitConfig(vol_mode="rolling")),
+             ("protecao_total", 60, "close", EarlyExitConfig(vol_mode="rolling", calibrate=False, delay=0)),
+             ("collar_ki", 45, "intraday", EarlyExitConfig(vol_mode="rolling", min_days=10, exit_spread=0.02, delay=2)),
              ("fko", 50, "close", EarlyExitConfig(vol_mode="fixed", vol_add=0.0, trigger=1.2)),
-             ("booster", 30, "close", EarlyExitConfig(exit_spread=0.0))]
+             ("booster", 30, "close", EarlyExitConfig(vol_mode="rolling", exit_spread=0.0))]
     for key, N, mon, cfg in cases:
         s = presets.PRESETS[key].builder()
         h = run_historical(s, prices, N, 0.0, mon, 0.0, cf_var)
@@ -147,8 +164,8 @@ def main() -> None:
             "saida": d["saida_antecipada"].astype(int).to_numpy(), "dia_saida": d["dia_saida"].to_numpy(),
             "retorno_final": d["retorno_final"].to_numpy(), "cdi_periodo": d["cdi_periodo"].to_numpy(),
             "cdi_inicio": d["cdi_inicio"].to_numpy()})
-    for key, t0, N, cfg in (("protecao_total", "2020-03-02", 120, EarlyExitConfig()),
-                            ("collar", "2020-09-01", 400, EarlyExitConfig(delay=0, exit_spread=0.0))):
+    for key, t0, N, cfg in (("protecao_total", "2020-03-02", 120, EarlyExitConfig(vol_mode="rolling")),
+                            ("collar", "2020-09-01", 400, EarlyExitConfig(vol_mode="rolling", delay=0, exit_spread=0.0))):
         s = presets.PRESETS[key].builder()
         x = run_ex_post_exit(s, prices, t0, N, 0.0, cfg, cf_var)
         out["saida"]["expost"].append({"preset": key, "trade": t0, "N": N, "cfg": vars(cfg),
@@ -183,7 +200,7 @@ def main() -> None:
                                        "summary": {k: v for k, v in summ.items() if k not in ("barreiras", "ci")},
                                        "ci": summ["ci"]})
         if key != "fko":
-            ee = run_historical_exit(s, prices, N, 0.0, EarlyExitConfig(), cf_var, res.df["retorno"].to_numpy(), mon,
+            ee = run_historical_exit(s, prices, N, 0.0, EarlyExitConfig(vol_mode="rolling"), cf_var, res.df["retorno"].to_numpy(), mon,
                                      0.001, cdi_ref=CDI_REF, regime_adjust=True)
             se = summarize_exit(ee)
             out["fase1"]["saida_regime"].append({
@@ -191,6 +208,52 @@ def main() -> None:
                 "retorno_final": ee.df["retorno_final"].to_numpy(), "cdi_periodo": ee.df["cdi_periodo"].to_numpy(),
                 "summary": {k: v for k, v in se.items() if k != "ci"}, "ci": se["ci"]})
     out["fase1"]["cdi_ref"] = CDI_REF
+
+    # Fase 2: GARCH/GJR, Monte Carlo FHS, marcação da saída com GARCH e calibração walk-forward
+    from estruturadas.backtest import ohlc_log_returns, run_monte_carlo
+    from estruturadas.calibration import walk_forward
+    from estruturadas.garch import fit_garch, term_vol, vol_panel
+    from estruturadas.rng import integers
+    gp = garch_prices()
+    lr, up, dn = ohlc_log_returns(gp)
+    fits = {m: fit_garch(lr, m, up, dn) for m in ("garch", "gjr")}
+    gk = ("omega", "alpha", "gamma", "beta", "loglik", "kappa", "iterations")
+    out["fase2"] = {
+        "rng_int": integers(31, 40, 1000),
+        "prices": {"d": [d.strftime("%Y-%m-%d") for d in gp.index], "c": gp["Close"].to_numpy(),
+                   "h": gp["High"].to_numpy(), "l": gp["Low"].to_numpy()},
+        "fits": {m: {**{k: getattr(f, k) for k in gk}, "h_next": f.h_next, "persistence": f.persistence,
+                     "half_life": f.half_life, "h": f.h[-30:], "z": f.z[:30], "up": f.up[:30]} for m, f in fits.items()},
+        "panel": vol_panel(fits["gjr"], lr, 63),
+        "term_vol": [[h1, m, float(term_vol(fits["gjr"], h1, m))] for h1 in (1e-4, 4e-4, 2e-3) for m in (1, 21, 126)],
+        "mc": [], "saida": [], "calib": None,
+    }
+    for key, N, mon, scale, drift in (("collar_ki", 63, "close", 1.0, "cdi"), ("protecao_total", 126, "intraday", 1.2, "cdi_premio"),
+                                      ("fko", 42, "close", 0.8, "historico")):
+        s = presets.PRESETS[key].builder()
+        r = run_monte_carlo(s, gp, N, 0.0, "fhs_garch", 3000, drift=drift, cdi_annual=0.12, seed=5, monitoring=mon,
+                            vol_scale=scale, garch=fits["gjr"])
+        sm = summarize(r)
+        out["fase2"]["mc"].append({"preset": key, "N": N, "monitoring": mon, "scale": scale, "drift": drift,
+                                   "sigma": r.meta["sigma"], "sT": r.df["acao_final"].to_numpy()[:20],
+                                   "summary": {k: sm[k] for k in ("p_lucro", "p_cdi", "p_barreira", "media", "mediana", "p5", "cvar5")},
+                                   "var0": r.meta["paths_exit_var"][0][:10]})
+    days2 = np.arange(len(gp))
+    cf2 = np.cumprod(np.r_[1.0, (1 + 0.0004 + 0.0002 * np.sin(days2[1:] / 60.0))])
+    fit_close = fit_garch(np.diff(np.log(gp["Close"].to_numpy())), "gjr")
+    out["fase2"]["fit_close"] = {k: getattr(fit_close, k) for k in ("omega", "alpha", "gamma", "beta")}
+    out["fase2"]["cdiF"] = cf2
+    for key, N, mon in (("collar_ki", 63, "close"), ("protecao_total", 120, "intraday")):
+        s = presets.PRESETS[key].builder()
+        h = run_historical(s, gp, N, 0.0, mon, 0.0, cf2)
+        ee = run_historical_exit(s, gp, N, 0.0, EarlyExitConfig(), cf2, h.df["retorno"].to_numpy(), mon, garch=fit_close)
+        out["fase2"]["saida"].append({"preset": key, "N": N, "monitoring": mon, "dia_saida": ee.df["dia_saida"].to_numpy(),
+                                      "retorno_final": ee.df["retorno_final"].to_numpy()})
+    s = presets.PRESETS["collar_ki"].builder()
+    cal = walk_forward(s, gp, 21, 0.0, "fhs_garch", step=25, n_paths=300, cdi_factor=cf2)
+    out["fase2"]["calib"] = {"N": 21, "step": 25, "n_paths": 300, "rows": cal.df.drop(columns=["data"]).to_dict("list"),
+                             "datas": [d.strftime("%Y-%m-%d") for d in cal.df["data"]],
+                             "brier": cal.brier().drop(columns=["indicador"]).to_dict("records")}
 
     # Calendário
     out["calendario"] = {
