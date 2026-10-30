@@ -8,13 +8,15 @@ import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
 from .data import TRADING_DAYS, previous_business_day
+from .garch import GarchFit, fhs_drift_daily, fhs_paths, fit_garch, term_vol
 from .legs import (Evaluation, Structure, event_label, evaluate_paths, first_hit_index,
                    payoff_profile_summary, returns_from_payoff)
 from .pricing import BGK_BETA, gbm_paths
 
 DRIFT_LABELS = {"cdi": "CDI", "cdi_premio": "CDI + prêmio", "zero": "Zero", "historico": "Histórico (média do período)",
                 "personalizado": "Personalizado"}
-MC_METHOD_LABELS = {"bootstrap": "Bootstrap em blocos", "gbm": "GBM (log-normal)"}
+MC_METHOD_LABELS = {"fhs_garch": "FHS-GARCH (vol condicional)", "bootstrap": "Bootstrap em blocos",
+                    "gbm": "GBM (log-normal)"}
 EXIT_PATHS = 2000  # caminhos guardados para a simulação da saída antecipada
 
 
@@ -220,22 +222,36 @@ def gbm_drift_daily(lr: np.ndarray, sigma: float, drift: str, cdi_annual: float,
 
 
 def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float,
-                    method: str = "bootstrap", n_paths: int = 10_000, block: int = 20,
+                    method: str = "fhs_garch", n_paths: int = 10_000, block: int = 20,
                     drift: str = "cdi", cdi_annual: float = 0.10, seed: int = 42,
                     monitoring: str = "close", extra_cost: float = 0.0,
                     vol_window: int | None = None, premium: float = 0.05, custom: float | None = None,
-                    vol_scale: float = 1.0) -> BacktestResult:
+                    vol_scale: float = 1.0, vol_model: str = "gjr", garch: GarchFit | None = None) -> BacktestResult:
     """Simula caminhos a partir do histórico e aplica a estrutura.
 
+    FHS-GARCH (padrão): parte da vol de hoje estimada pelo GARCH/GJR e sorteia choques padronizados
+    reais (com a máxima e a mínima do dia); a vol de cada caminho evolui com os próprios choques.
+    ``garch`` reaproveita um ajuste já feito (grade de cenários, calibração).
     Bootstrap: sorteia blocos de dias reais (fechamento, máxima e mínima juntos), com a média trocada
     pelo drift escolhido e os desvios escalados por ``vol_scale``; com monitoramento intradiário usa a
     máxima/mínima sorteadas. GBM: só fechamentos; intradiário pela correção de Broadie-Glasserman-Kou."""
     lr, up, dn = ohlc_log_returns(prices)
-    sigma_base = float(np.std(lr[-vol_window:] if vol_window else lr, ddof=1) * np.sqrt(TRADING_DAYS))
-    sigma = sigma_base * vol_scale
     mu = drift_annual(drift, cdi_annual, premium, custom)
-    high = low = None
-    if method == "bootstrap":
+    high = low = hv = None
+    if method == "fhs_garch":
+        if garch is None:
+            garch = fit_garch(lr, vol_model, up, dn)
+        sigma_base = float(term_vol(garch, garch.h_next, n_days))
+    else:
+        sigma_base = float(np.std(lr[-vol_window:] if vol_window else lr, ddof=1) * np.sqrt(TRADING_DAYS))
+    sigma = sigma_base * vol_scale
+    if method == "fhs_garch":
+        close, high, low, hv = fhs_paths(garch, n_paths, n_days, seed, fhs_drift_daily(lr, mu, vol_scale), vol_scale,
+                                         intraday=monitoring == "intraday")
+        if monitoring != "intraday":
+            high = low = None
+        ev = evaluate_paths(structure, close, high, low, monitoring)
+    elif method == "bootstrap":
         close, high, low = bootstrap_ohlc_paths(lr, n_paths, n_days, block, seed,
                                                 bootstrap_drift_daily(lr, mu, vol_scale), vol_scale, up, dn)
         ev = evaluate_paths(structure, close, high, low, monitoring)
@@ -253,7 +269,9 @@ def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cos
     meta = {"method": method, "sigma": sigma, "sigma_base": sigma_base, "vol_scale": vol_scale, "drift": drift,
             "mu": mu, "premium": premium, "block": block, "seed": seed, "monitoring": monitoring,
             "paths_sample": close[: min(200, len(close))], "paths_exit": close[:k],
-            "paths_exit_high": None if high is None else high[:k], "paths_exit_low": None if low is None else low[:k]}
+            "paths_exit_high": None if high is None else high[:k], "paths_exit_low": None if low is None else low[:k],
+            "paths_exit_var": None if hv is None else hv[:k], "garch": garch if method == "fhs_garch" else None,
+            "vol_model": vol_model}
     return BacktestResult(df, _event_columns(structure), n_days, len(df),
                           _return_max(structure, cost, extra_cost), "mc", meta)
 
@@ -262,17 +280,21 @@ SCENARIO_VOLS = (0.8, 1.0, 1.2)
 SCENARIO_DRIFTS = ("zero", "cdi", "cdi_premio")
 
 
-def run_scenarios(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float, method: str = "bootstrap",
+def run_scenarios(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float, method: str = "fhs_garch",
                   block: int = 20, cdi_annual: float = 0.10, seed: int = 42, monitoring: str = "close",
                   extra_cost: float = 0.0, premium: float = 0.05, n_paths: int = 5000,
-                  vol_scales=SCENARIO_VOLS) -> pd.DataFrame:
+                  vol_scales=SCENARIO_VOLS, vol_model: str = "gjr", garch: GarchFit | None = None) -> pd.DataFrame:
     """Grade de premissas do Monte Carlo (incerteza de premissa, não de sorteio): drift ∈ {zero, CDI,
-    CDI + prêmio} × vol ∈ {0,8; 1,0; 1,2} × a vol de base, com os mesmos números aleatórios."""
+    CDI + prêmio} × vol ∈ {0,8; 1,0; 1,2} × a vol de base (no FHS, a vol prevista pelo GARCH), com os
+    mesmos números aleatórios."""
+    if method == "fhs_garch" and garch is None:
+        lr, up, dn = ohlc_log_returns(prices)
+        garch = fit_garch(lr, vol_model, up, dn)
     rows = []
     for drift in SCENARIO_DRIFTS:
         for vs in vol_scales:
             r = run_monte_carlo(structure, prices, n_days, cost, method, n_paths, block, drift, cdi_annual, seed,
-                                monitoring, extra_cost, premium=premium, vol_scale=vs)
+                                monitoring, extra_cost, premium=premium, vol_scale=vs, vol_model=vol_model, garch=garch)
             d = r.df
             rows.append({"drift": drift, "mu": r.meta["mu"], "vol_scale": vs, "sigma": r.meta["sigma"],
                          "p_lucro": float((d["retorno"] > 1e-9).mean()),

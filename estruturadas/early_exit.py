@@ -13,8 +13,12 @@ Marcação a modelo de cada perna no dia k (prazo restante T = (N − k)/252):
   fechamento diário, a barreira é afastada do preço pela correção de Broadie-Glasserman-Kou
   (B·e^{±0,5826·σ·√Δt}), que aproxima o monitoramento discreto por uma fórmula contínua.
 
-Volatilidade "implícita" usada na marcação: vol realizada móvel (padrão 63 pregões, só com dados até o
-dia) + um adicional (padrão 3 pontos), ou a mesma vol da contratação durante toda a operação.
+Volatilidade "implícita" usada na marcação (+ um adicional, padrão 3 pontos):
+* GARCH (padrão): vol média prevista pelo GARCH/GJR para o prazo restante, a partir da variância
+  condicional do dia (só com dados até o dia; parâmetros estimados no período inteiro). No Monte Carlo
+  FHS, cada caminho usa a própria variância simulada;
+* vol realizada móvel (padrão 63 pregões, só com dados até o dia);
+* a mesma vol da contratação durante toda a operação.
 Taxa: CDI do dia (histórico) ou CDI constante (Monte Carlo), em taxa contínua.
 
 Calibração na contratação (padrão): o modelo raramente dá exatamente o preço pago (a mesa usa vol
@@ -32,11 +36,13 @@ import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
 from .backtest import regime_factor
+from .garch import GarchFit, fit_garch, term_vol
 from .legs import Structure, returns_from_payoff
 from .pricing import BGK_BETA, barrier_price, bs_price_vec
 
 TRADING_DAYS = 252
-VOL_MODE_LABELS = {"rolling": "Vol realizada móvel + adicional", "fixed": "Vol da contratação + adicional (fixa)"}
+VOL_MODE_LABELS = {"garch": "Vol GARCH do prazo restante + adicional", "rolling": "Vol realizada móvel + adicional",
+                   "fixed": "Vol da contratação + adicional (fixa)"}
 
 
 @dataclass
@@ -45,7 +51,8 @@ class EarlyExitConfig:
     exit_spread: float = 0.01  # desconto sobre a marcação na desmontagem (fração do valor inicial)
     delay: int = 1  # pregões entre o gatilho e a desmontagem (OK do investidor)
     min_days: int = 0  # carência (pregões) antes de poder sair
-    vol_mode: str = "rolling"  # "rolling" | "fixed"
+    vol_mode: str = "garch"  # "garch" | "rolling" | "fixed"
+    vol_model: str = "gjr"  # modelo do modo "garch": "gjr" | "garch"
     vol_window: int = 63  # janela da vol realizada (pregões)
     vol_add: float = 0.03  # adicional sobre a vol realizada (0,03 = 3 pontos)
     mc_paths: int = 2000  # caminhos do Monte Carlo usados na saída antecipada (subamostra)
@@ -71,6 +78,17 @@ def rolling_vol(close, window: int = 63) -> np.ndarray:
     vol = pd.Series(lr).rolling(window).std(ddof=1).to_numpy() * np.sqrt(TRADING_DAYS)
     vol = pd.Series(vol).bfill().fillna(0.30).to_numpy()
     return vol
+
+
+def garch_variance(close, model: str = "gjr", fit: GarchFit | None = None):
+    """(ajuste, h por pregão): h[i] = variância prevista no fechamento do pregão i para o dia seguinte.
+    Devolve (None, None) se o histórico for curto demais para o GARCH (a marcação usa a vol móvel)."""
+    lr = np.diff(np.log(np.asarray(close, dtype=float)))
+    try:
+        fit = fit or fit_garch(lr, model)
+    except ValueError:
+        return None, None
+    return fit, fit.h if len(fit.h) == len(lr) + 1 else None
 
 
 def cdi_rate_series(cdi_factor) -> np.ndarray:
@@ -179,7 +197,7 @@ def simulate_exit(structure: Structure, close, up, down, cdi_acc, rate, sigma, c
 def run_historical_exit(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float,
                         cfg: EarlyExitConfig, cdi_factor, ret_hold, monitoring: str = "close",
                         extra: float = 0.0, cdi_ref: float | None = None,
-                        regime_adjust: bool = False) -> EarlyExitResult:
+                        regime_adjust: bool = False, garch: GarchFit | None = None) -> EarlyExitResult:
     """Saída antecipada em todas as janelas históricas (mesmas janelas de ``run_historical``).
 
     Com ``regime_adjust`` (e ``cdi_ref``), usa os caminhos re-ancorados no CDI de hoje e o CDI de hoje
@@ -211,24 +229,31 @@ def run_historical_exit(structure: Structure, prices: pd.DataFrame, n_days: int,
         rate = sliding_window_view(rates, N + 1)[:, 1:]
         rate0 = rates[:n]
     rv = rolling_vol(close, cfg.vol_window) + cfg.vol_add
-    if cfg.vol_mode == "fixed":
+    sigma0 = rv[:n]
+    fit, hp = garch_variance(close, cfg.vol_model, garch) if cfg.vol_mode == "garch" else (None, None)
+    if hp is not None:
+        remaining = N - np.arange(1, N + 1)
+        sigma = term_vol(fit, sliding_window_view(hp, N + 1)[:, 1:], remaining[None, :]) + cfg.vol_add
+        sigma0 = term_vol(fit, hp[:n], N) + cfg.vol_add
+    elif cfg.vol_mode == "fixed":
         sigma = np.repeat(rv[:n, None], N, axis=1)
     else:
         sigma = sliding_window_view(rv, N + 1)[:, 1:]
     df = simulate_exit(structure, S, up, down, cdi_acc, rate, sigma, cost, cfg, ret_hold, monitoring, extra,
-                       rate0=rate0, sigma0=rv[:n])
+                       rate0=rate0, sigma0=sigma0)
     df["cdi_inicio"] = np.expm1(rates[:n])  # CDI anual no início da janela (para separar por regime de juros)
     return EarlyExitResult(df, N, cfg)
 
 
 def run_mc_exit(structure: Structure, paths, n_days: int, cost: float, cfg: EarlyExitConfig, ret_hold,
                 sigma_hist: float, cdi_annual: float, monitoring: str = "close", extra: float = 0.0,
-                high=None, low=None) -> EarlyExitResult:
+                high=None, low=None, var_paths=None, garch: GarchFit | None = None,
+                vol_scale: float = 1.0) -> EarlyExitResult:
     """Saída antecipada nos primeiros ``cfg.mc_paths`` caminhos do Monte Carlo.
 
-    Os caminhos só têm fechamentos: com monitoramento intradiário, os toques usam a barreira deslocada
-    em direção ao preço (como no payoff do MC). Marcação com vol constante (vol histórica + adicional)
-    e CDI constante."""
+    Com máxima/mínima sorteadas (bootstrap, FHS), os toques intradiários usam esses extremos; sem elas
+    (GBM), a barreira deslocada em direção ao preço. Marcação com CDI constante e vol constante (vol do
+    método + adicional) ou, no FHS (``var_paths`` + ``garch``), a vol GARCH do prazo restante de cada caminho."""
     paths = np.asarray(paths, dtype=float)[: cfg.mc_paths]
     m, N = paths.shape
     if monitoring == "intraday" and high is not None and low is not None:
@@ -241,9 +266,13 @@ def run_mc_exit(structure: Structure, paths, n_days: int, cost: float, cfg: Earl
     cdi_acc = np.repeat(((1 + cdi_annual) ** (k / TRADING_DAYS) - 1)[None, :], m, axis=0)
     rate = np.full((m, N), np.log1p(cdi_annual))
     sigma = np.full((m, N), sigma_hist + cfg.vol_add)
+    if var_paths is not None and garch is not None and cfg.vol_mode != "fixed":
+        remaining = N - np.arange(1, N + 1)
+        sigma = vol_scale * term_vol(garch, np.asarray(var_paths, dtype=float)[:m], remaining[None, :]) + cfg.vol_add
     mon_mtm = "continuous" if monitoring == "intraday" else "close"
     df = simulate_exit(structure, paths, up, down, cdi_acc, rate, sigma, cost, cfg,
-                       np.asarray(ret_hold, dtype=float)[:m], mon_mtm, extra, rate0=rate[:, 0], sigma0=sigma[:, 0])
+                       np.asarray(ret_hold, dtype=float)[:m], mon_mtm, extra, rate0=rate[:, 0],
+                       sigma0=np.full(m, sigma_hist + cfg.vol_add))
     return EarlyExitResult(df, N, cfg)
 
 
@@ -283,8 +312,13 @@ def run_ex_post_exit(structure: Structure, prices: pd.DataFrame, trade_date, n_t
     rate = cdi_rate_series(F)[i0 + 1: i0 + 1 + m]
     rv = rolling_vol(close, cfg.vol_window) + cfg.vol_add
     sigma = np.full(m, rv[i0]) if cfg.vol_mode == "fixed" else rv[i0 + 1: i0 + 1 + m]
+    sigma0 = rv[i0]
+    fit, hp = garch_variance(close, cfg.vol_model) if cfg.vol_mode == "garch" else (None, None)
+    if hp is not None:
+        sigma = term_vol(fit, hp[i0 + 1: i0 + 1 + m], n_total - np.arange(1, m + 1)) + cfg.vol_add
+        sigma0 = float(term_vol(fit, hp[i0], n_total)) + cfg.vol_add
     run_max, run_min = np.maximum.accumulate(up), np.minimum.accumulate(down)
-    offset = initial_offset(structure, cost, cfg, n_total, cdi_rate_series(F)[i0], rv[i0], monitoring)[0]
+    offset = initial_offset(structure, cost, cfg, n_total, cdi_rate_series(F)[i0], sigma0, monitoring)[0]
     ks = np.arange(1, m + 1)
     live = ks < n_total
     ret = np.full(m, np.nan)
