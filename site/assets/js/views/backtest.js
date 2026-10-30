@@ -136,7 +136,7 @@
 
   /* ---------------- Página ---------------- */
   let root = null, winIdx = null;
-  const alive = () => root && document.body.contains(root);
+  const alive = () => root && document.body.contains(root) && App.route === "backtest";
   function render(el) { root = el; winIdx = null; update(App.ctx); }
 
   function update(ctx) {

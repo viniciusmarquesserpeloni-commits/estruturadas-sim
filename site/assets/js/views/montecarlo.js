@@ -5,7 +5,7 @@
   const App = window.App, E = App.E, F = App.fmt, esc = App.esc, CH = () => App.charts;
   App.views = App.views || {};
   let root = null, calibKey = "lucro";
-  const alive = () => root && document.body.contains(root);
+  const alive = () => root && document.body.contains(root) && App.route === "monte-carlo";
   function render(el) { root = el; update(App.ctx); }
 
   /* Painel de volatilidade (só no FHS-GARCH). */

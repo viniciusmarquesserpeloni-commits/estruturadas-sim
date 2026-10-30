@@ -30,6 +30,7 @@
     view.innerHTML = "";
     document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-current", t.dataset.route === route ? "page" : "false"));
     document.getElementById("params").classList.toggle("hidden", route === "metodologia");
+    App.route = route; // as páginas só se redesenham enquanto forem a rota atual (todas usam o mesmo #view)
     routes[route].render(view);
     window.scrollTo(0, 0);
   }

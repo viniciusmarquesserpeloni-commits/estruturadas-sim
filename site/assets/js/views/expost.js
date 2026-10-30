@@ -4,7 +4,7 @@
   const App = window.App, E = App.E, F = App.fmt, esc = App.esc, CH = () => App.charts;
   App.views = App.views || {};
   let root = null;
-  const alive = () => root && document.body.contains(root);
+  const alive = () => root && document.body.contains(root) && App.route === "ex-post";
 
   function render(el) {
     root = el;
