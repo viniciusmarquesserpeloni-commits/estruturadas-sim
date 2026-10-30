@@ -226,6 +226,51 @@ def exit_days_chart(results: dict, n_days: int) -> go.Figure:
     return fig
 
 
+def vol_chart(prices: pd.DataFrame, fit, n_days: int, window: int = 63, years: int = 3) -> go.Figure:
+    """Painel de vol: vol condicional do GARCH, vol realizada móvel e previsão para o prazo (tracejada)."""
+    from .early_exit import rolling_vol  # import local: evita ciclo backtest -> charts
+    from .garch import expected_var
+    close = prices["Close"].to_numpy(dtype=float)
+    n = min(len(close), len(fit.h))
+    i0 = max(0, n - 252 * years)
+    idx = prices.index[:n]
+    cond = np.sqrt(fit.h[:n] * 252)
+    real = rolling_vol(close[:n], window)
+    fut = pd.bdate_range(idx[-1], periods=n_days + 1)
+    fc = np.sqrt(expected_var(fit, fit.h_next, np.arange(0, n_days + 1)) * 252)
+    fc[0] = np.sqrt(fit.h_next * 252)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=idx[i0:], y=cond[i0:], name="Vol condicional (GARCH)", line=dict(color=BLUE, width=1.8),
+                             hovertemplate="%{y:.1%}"))
+    fig.add_trace(go.Scatter(x=idx[i0:], y=real[i0:], name=f"Vol realizada ({window} pregões)",
+                             line=dict(color=GRAY, width=1.2), hovertemplate="%{y:.1%}"))
+    fig.add_trace(go.Scatter(x=fut, y=fc, name="Previsão para o prazo", line=dict(color=ORANGE, width=2, dash="dash"),
+                             hovertemplate="%{y:.1%}"))
+    fig.add_hline(y=np.sqrt(fit.long_run_var * 252), line=dict(color=GRAY, width=1, dash="dot"),
+                  annotation_text="longo prazo", annotation_font_color=GRAY)
+    _layout(fig, "Vol condicional × realizada", "Data", "Vol anualizada", height=380)
+    fig.update_xaxes(tickformat="%m/%Y")
+    fig.update_yaxes(tickformat=".0%", rangemode="tozero")
+    return fig
+
+
+def reliability_chart(rel: pd.DataFrame, label: str) -> go.Figure:
+    """Diagrama de confiabilidade: prevista (média da faixa) × frequência realizada; tamanho = nº de datas."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", line=dict(color=GRAY, dash="dash", width=1.2),
+                             name="Calibração perfeita", hoverinfo="skip"))
+    size = 10 + 25 * np.sqrt(rel["n"] / max(1, rel["n"].max()))
+    fig.add_trace(go.Scatter(x=rel["prev_media"], y=rel["real"], mode="markers", name=label,
+                             marker=dict(color=BLUE, size=size, opacity=0.8), customdata=rel[["faixa", "n"]],
+                             hovertemplate="Faixa %{customdata[0]}<br>Prevista %{x:.1%}<br>Aconteceu %{y:.1%}"
+                                           "<br>%{customdata[1]} datas<extra></extra>"))
+    _layout(fig, f"Diagrama de confiabilidade — {label}", f"{label} prevista", "Frequência realizada", height=380,
+            hovermode="closest")
+    fig.update_xaxes(tickformat=".0%", range=[0, 1])
+    fig.update_yaxes(tickformat=".0%", range=[0, 1])
+    return fig
+
+
 def ex_post_exit_chart(x, trigger: float) -> go.Figure:
     """Ex-post: retorno de saída estimado (marcação diária) × gatilho de % do CDI."""
     fig = go.Figure()

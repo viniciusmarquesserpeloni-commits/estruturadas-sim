@@ -66,7 +66,7 @@
       </div>
       <div class="f-group"><span class="f-label">Barreiras e custos</span>
         <label class="fl">Monitoramento ${sel("a-mon", [["close", "Fechamento diário"], ["intraday", "Intradiário"]], adv.monitoring)}</label>
-        <div class="hint">Intradiário: máxima (barreiras de alta) e mínima (de baixa) do dia; no Monte Carlo, correção de Broadie-Glasserman-Kou.</div>
+        <div class="hint">Intradiário: máxima (barreiras de alta) e mínima (de baixa) do dia; no Monte Carlo, máxima/mínima sorteadas junto com o dia (FHS, bootstrap) ou correção de Broadie-Glasserman-Kou (GBM).</div>
         <label class="fl">Custos adicionais (% do investido) <input class="input num" id="a-extra" value="${pctIn(adv.extra)}" inputmode="decimal"></label>
       </div>
       <div class="f-group"><span class="f-label">Precificação (modo Teórico)</span>
@@ -77,7 +77,9 @@
         <div class="hint">Em branco = automático: vol histórica de 252 pregões e Selic meta (BCB).</div>
       </div>
       <div class="f-group"><span class="f-label">Monte Carlo (backtest)</span>
-        <label class="fl">Método ${sel("a-mcm", [["bootstrap", "Bootstrap em blocos"], ["gbm", "GBM (log-normal)"]], adv.mcMethod)}</label>
+        <label class="fl">Método ${sel("a-mcm", Object.entries(E.MC_METHOD_LABELS), adv.mcMethod)}</label>
+        ${adv.mcMethod === "fhs_garch" ? `<label class="fl">Modelo de vol ${sel("a-vm", Object.entries(E.VOL_MODEL_LABELS), adv.volModel || "gjr")}</label>
+        <div class="hint">Parte da vol de hoje e sorteia choques reais padronizados; a vol de cada caminho reage aos próprios choques e volta à média de longo prazo.</div>` : ""}
         <label class="fl">Retorno esperado da ação ${sel("a-drift", Object.entries(E.DRIFT_LABELS), adv.mcDrift)}</label>
         ${adv.mcDrift === "cdi_premio" ? `<label class="fl">Prêmio sobre o CDI (p.p. a.a.) <input class="input num" id="a-prem" value="${pctIn(adv.mcPremium)}" inputmode="decimal"></label>` : ""}
         ${adv.mcDrift === "personalizado" ? `<label class="fl">Retorno esperado (% a.a.) <input class="input num" id="a-custom" value="${pctIn(adv.mcCustom)}" inputmode="decimal"></label>` : ""}
@@ -93,7 +95,7 @@
         <label class="fl">Spread de saída (% do valor inicial) <input class="input num" id="x-spread" value="${pctIn(adv.exitSpread)}" inputmode="decimal"></label>
         <label class="fl">Pregões até desmontar (OK do investidor) <input class="input num" id="x-delay" value="${adv.exitDelay}" inputmode="numeric"></label>
         <label class="fl">Carência (pregões) <input class="input num" id="x-min" value="${adv.exitMinDays}" inputmode="numeric"></label>
-        <label class="fl">Vol da marcação ${sel("x-vol", [["rolling", "Móvel 63d + adicional"], ["fixed", "Da contratação (fixa)"]], adv.exitVolMode)}</label>
+        <label class="fl">Vol da marcação ${sel("x-vol", [["garch", "GARCH do prazo restante + adicional"], ["rolling", "Móvel 63d + adicional"], ["fixed", "Da contratação (fixa)"]], adv.exitVolMode)}</label>
         <label class="fl">Adicional de vol (pontos) <input class="input num" id="x-voladd" value="${F.num(adv.exitVolAdd * 100, 1)}" inputmode="decimal"></label>
         <label class="fl">Calibrar ao preço pago ${sel("x-cal", [["1", "Sim"], ["0", "Não (modelo puro)"]], adv.exitCalibrate ? 1 : 0)}</label>
         <div class="hint">Desmonta quando o retorno acumulado, já descontado o spread, passa do gatilho; a marcação usa Black-Scholes e fórmulas de barreira.</div>
@@ -169,6 +171,7 @@
     $("a-q").addEventListener("change", (e) => setAdv({ q: optPct(e.target.value) || 0 }));
     $("a-pp").addEventListener("change", (e) => setAdv({ pricingPaths: +e.target.value }));
     $("a-mcm").addEventListener("change", (e) => { setAdv({ mcMethod: e.target.value }); render(); });
+    if ($("a-vm")) $("a-vm").addEventListener("change", (e) => setAdv({ volModel: e.target.value }));
     if ($("a-drift")) $("a-drift").addEventListener("change", (e) => { setAdv({ mcDrift: e.target.value }); render(); });
     if ($("a-prem")) $("a-prem").addEventListener("change", (e) => { const v = optPct(e.target.value); if (v != null) setAdv({ mcPremium: v }); });
     if ($("a-custom")) $("a-custom").addEventListener("change", (e) => setAdv({ mcCustom: optPct(e.target.value) }));
@@ -184,7 +187,7 @@
     $("x-vol").addEventListener("change", (e) => setAdv({ exitVolMode: e.target.value }));
     $("x-voladd").addEventListener("change", (e) => setAdv({ exitVolAdd: optPct(e.target.value) || 0 }));
     $("x-cal").addEventListener("change", (e) => setAdv({ exitCalibrate: e.target.value === "1" }));
-    $("a-reset").addEventListener("click", () => { if (confirm("Restaurar todos os parâmetros e a estrutura padrão (Proteção Total BBDC4)?")) { App.csv = null; App.reset(); } });
+    $("a-reset").addEventListener("click", () => { if (confirm("Restaurar todos os parâmetros e a estrutura padrão (Collar Knock In de 3 meses)?")) { App.csv = null; App.reset(); } });
     $("a-csv").addEventListener("change", async (e) => {
       const f = e.target.files[0]; if (!f) return;
       try { App.csv = App.parseCsv(await f.text()); App.toast(`CSV carregado: ${F.int(App.csv.d.length)} pregões`); App.recompute(0); render(); }

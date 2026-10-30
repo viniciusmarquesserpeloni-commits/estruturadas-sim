@@ -53,8 +53,10 @@
       ${E.SCENARIO_DRIFTS.map((d) => `<tr><td>${lbl[d]}</td>${vols.map((v) => { const r = rows.find((x) => x.drift === d && x.volScale === v); const c = d === "cdi" && v === 1; return `<td${c ? ' style="font-weight:700"' : ""}>${isFinite(r[k]) ? F.pct(r[k], 1, false) : "—"}</td>`; }).join("")}</tr>`).join("")}
       </tbody></table></div>`;
     const v63 = ctx.P ? E.histVol(ctx.P.c, 63) : NaN, base = rows.find((r) => r.volScale === 1).sigma / 1;
+    const baseTxt = res && res.method === "fhs_garch" ? `vol média prevista pelo GARCH para o prazo (${F.pct(base, 1, false)} a.a.; no FHS a escala multiplica a vol de cada dia, que continua reagindo aos choques)`
+      : `vol histórica do período carregado (${F.pct(base, 1, false)} a.a.)`;
     return head + `<div class="card-b"><div class="grid g-3">${table("p_lucro", "P(lucro > 0)")}${table("p_cdi", "P(retorno > CDI de hoje)")}${table("p_barreira", "P(barreira acionada)")}</div></div>
-      <div class="card-note">Em negrito, o cenário central (retorno esperado = CDI, vol de base). Vol de base = vol histórica do período carregado (${F.pct(base, 1, false)} a.a.); a vol realizada dos últimos 63 pregões é ${F.pct(v63, 1, false)} a.a.${isFinite(v63) ? ` (${F.num(v63 / base, 2)}× a base)` : ""}. Mesmos números aleatórios em todos os cenários.</div></div>`;
+      <div class="card-note">Em negrito, o cenário central (retorno esperado = CDI, vol de base). Vol de base = ${baseTxt}; a vol realizada dos últimos 63 pregões é ${F.pct(v63, 1, false)} a.a.${isFinite(v63) ? ` (${F.num(v63 / base, 2)}× a base)` : ""}. Mesmos números aleatórios em todos os cenários.</div></div>`;
   };
   UI.csv = function (res, invested) {
     const head = ["data_inicio", "data_fim", "acao_final", "retorno", "retorno_acao", "retorno_cdi", "barreira_acionada", "resultado_rs"];
@@ -78,7 +80,7 @@
 
   /* ---------------- Saída antecipada (compartilhado com a página de Monte Carlo) ---------------- */
   UI.exitPremises = (cfg) => `Desmontagem ${cfg.delay === 0 ? "no próprio dia do gatilho" : `${cfg.delay} pregão(ões) após o gatilho (OK do investidor)`}, pelo valor daquele dia ·
-    spread de saída ${F.pct(cfg.exitSpread, 2, false)} · ${cfg.minDays ? `carência de ${cfg.minDays} pregões · ` : ""}marcação: ${cfg.volMode === "fixed" ? "vol da contratação" : "vol realizada de 63 pregões"} + ${F.num(cfg.volAdd * 100, 1)} pts, ${cfg.calibrate ? "calibrada ao preço pago na contratação" : "modelo puro (sem calibração)"}.`;
+    spread de saída ${F.pct(cfg.exitSpread, 2, false)} · ${cfg.minDays ? `carência de ${cfg.minDays} pregões · ` : ""}marcação: ${cfg.volMode === "fixed" ? "vol da contratação" : cfg.volMode === "garch" ? "vol GARCH prevista para o prazo restante" : "vol realizada de 63 pregões"} + ${F.num(cfg.volAdd * 100, 1)} pts, ${cfg.calibrate ? "calibrada ao preço pago na contratação" : "modelo puro (sem calibração)"}.`;
   /* kind = "hist" | "mc": o bloco mostra os dois métodos na tabela e destaca o da página. */
   UI.exitBlock = function (ctx, kind) {
     const st = App.state, cfg = ctx.exitCfg || App.exitCfg(st);
@@ -120,7 +122,7 @@
           <div class="card-b"><div class="chart" id="${kind}-exitdays"></div></div>
           <div class="card-note">${UI.exitPremises(cfg)}</div></div>
         <div class="card"><div class="card-h"><h3>Métricas com saída antecipada</h3><span class="sub">histórico × Monte Carlo</span></div><div class="card-b">${table}</div>
-          <div class="card-note">Retornos comparados ao CDI do período em que o dinheiro ficou de fato na estrutura. Monte Carlo: marcação com vol e CDI constantes nos primeiros ${F.int(E.EXIT_PATHS)} caminhos.</div></div>
+          <div class="card-note">Retornos comparados ao CDI do período em que o dinheiro ficou de fato na estrutura. Monte Carlo: marcação com CDI constante e ${ctx.mc && ctx.mc.method === "fhs_garch" && cfg.volMode !== "fixed" ? "a vol GARCH de cada caminho" : "vol constante"} nos primeiros ${F.int(E.EXIT_PATHS)} caminhos.</div></div>
       </div>${regimes}`;
   };
   UI.mountExit = function (rootEl, ctx, kind) {

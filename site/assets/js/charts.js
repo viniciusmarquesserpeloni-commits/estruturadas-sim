@@ -140,6 +140,45 @@
     });
   };
 
+  /* Painel de vol: vol condicional do GARCH (anualizada), vol realizada de 63 pregões, previsão para o prazo
+     (tracejada) e a vol de longo prazo. vh = { d, cond, realized }; fc = [[data, vol], ...]. */
+  C.vol = function (el, vh, fc, longRun) {
+    const n = vh.d.length, i0 = Math.max(0, n - 756);
+    const take = (a) => { const out = []; for (let i = i0; i < n; i++) out.push([vh.d[i], a[i]]); return out; };
+    const series = [
+      { name: "Vol condicional (GARCH)", type: "line", showSymbol: false, data: take(vh.cond), lineStyle: { color: BLUE, width: 1.8 }, itemStyle: { color: BLUE }, sampling: "lttb" },
+      { name: "Vol realizada (63 pregões)", type: "line", showSymbol: false, data: vh.realized ? take(vh.realized) : [], lineStyle: { color: GRAY, width: 1.2 }, itemStyle: { color: GRAY }, sampling: "lttb" },
+      { name: "Previsão para o prazo", type: "line", showSymbol: false, data: fc, lineStyle: { color: ORANGE, width: 2, type: "dashed" }, itemStyle: { color: ORANGE } },
+    ];
+    series[0].markLine = { symbol: "none", silent: true, data: [hline(longRun, `longo prazo ${pct(longRun)}`, GRAY, "dotted", "insideStartTop")] };
+    return C.mount(el, {
+      grid: { left: 8, right: 16, top: 40, bottom: 8, containLabel: true },
+      legend,
+      tooltip: Object.assign({}, tooltipBase, { trigger: "axis", axisPointer: { type: "line", lineStyle: { color: AXIS } },
+        formatter: (ps) => `<div class="tt"><div class="tt-h">${F.date(ps[0].data[0])}</div>${ps.map((p) => row(p.seriesName, pct(p.data[1], 1), p.color, p.seriesIndex === 2)).join("")}</div>` }),
+      xAxis: Object.assign({ type: "time" }, axis, { splitLine: { show: false }, axisLabel: { color: MUTED, fontSize: 11, hideOverlap: true, formatter: { year: "{yyyy}", month: "{MM}/{yy}", day: "{dd}/{MM}" } } }),
+      yAxis: Object.assign({ type: "value", min: 0 }, axis, { axisLabel: { color: MUTED, fontSize: 11, formatter: (v) => pct(v) } }),
+      series,
+    });
+  };
+
+  /* Diagrama de confiabilidade: probabilidade prevista (média da faixa) × frequência realizada; o tamanho do
+     ponto cresce com o nº de datas na faixa. Pontos sobre a diagonal = probabilidades bem calibradas. */
+  C.reliability = function (el, rows, label) {
+    const maxN = Math.max(1, ...rows.map((r) => r.n));
+    return C.mount(el, {
+      grid: { left: 8, right: 16, top: 16, bottom: 8, containLabel: true },
+      tooltip: Object.assign({}, tooltipBase, { trigger: "item",
+        formatter: (p) => { if (p.seriesIndex) return ""; const r = rows[p.dataIndex]; return `<div class="tt"><div class="tt-h">Previsões entre ${r.faixa}</div>${row("Prevista (média)", pct(r.prev_media, 1))}${row("Aconteceu", pct(r.real, 1))}${row("Datas", F.int(r.n))}</div>`; } }),
+      xAxis: Object.assign({ type: "value", min: 0, max: 1, name: `${label} prevista`, nameLocation: "middle", nameGap: 26, nameTextStyle: { color: MUTED, fontSize: 11 } }, axis, { axisLabel: { color: MUTED, fontSize: 11, formatter: (v) => pct(v) } }),
+      yAxis: Object.assign({ type: "value", min: 0, max: 1, name: "frequência realizada", nameTextStyle: { color: MUTED, fontSize: 11 } }, axis, { axisLabel: { color: MUTED, fontSize: 11, formatter: (v) => pct(v) } }),
+      series: [
+        { type: "scatter", data: rows.map((r) => [r.prev_media, r.real, r.n]), symbolSize: (v) => 8 + 22 * Math.sqrt(v[2] / maxN), itemStyle: { color: BLUE, opacity: 0.8 } },
+        { type: "line", data: [[0, 0], [1, 1]], showSymbol: false, silent: true, lineStyle: { color: GRAY, type: "dashed", width: 1.2 } },
+      ],
+    });
+  };
+
   /* Ex-post: caminho realizado com strikes e barreiras em R$, marcos da operação e toque na barreira. */
   C.expost = function (el, ex, s, ticker) {
     const xEnd = ex.obsDate > ex.lastDate ? ex.obsDate : ex.lastDate;

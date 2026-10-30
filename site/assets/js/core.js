@@ -44,12 +44,13 @@
   const DEFAULT_ADV = {
     start: "2010-01-01", adjusted: true, monitoring: "close", extra: 0,
     vol: null, rate: null, q: 0, pricingPaths: 50000, pricingSeed: 42,
-    mcMethod: "bootstrap", mcDrift: "cdi", mcPremium: 0.05, mcCustom: null, mcPaths: 10000, mcBlock: 20, mcSeed: 42,
+    mcMethod: "fhs_garch", volModel: "gjr", mcDrift: "cdi", mcPremium: 0.05, mcCustom: null, mcPaths: 10000, mcBlock: 20, mcSeed: 42,
     regimeAdjust: true,
     exitOn: true, exitTrigger: 1.5, exitSpread: 0.01, exitDelay: 1, exitMinDays: 0,
-    exitVolMode: "rolling", exitVolAdd: 0.03, exitCalibrate: true,
+    exitVolMode: "garch", exitVolAdd: 0.03, exitCalibrate: true,
   };
-  const STATE_VERSION = 2; // 2 = revisão metodológica (drift CDI, ajuste de regime, CDI efetivo, padrão de 3 meses)
+  // 2 = revisão metodológica (drift CDI, ajuste de regime, CDI efetivo, padrão de 3 meses); 3 = FHS-GARCH como padrão
+  const STATE_VERSION = 3;
   function defaults() {
     // padrão: estrutura típica de 3 meses (63 pregões); a lâmina Proteção Total BBDC4 segue como preset
     const s = E.PRESETS.collar_ki.build(1.0, 1.06, 1.12);
@@ -64,6 +65,12 @@
   }
   function loadState() {
     const d = defaults(), saved = store.get("state", null);
+    if (saved && saved.version === 2) {
+      // versão 2 -> 3: mantém tudo e só troca o Monte Carlo e a marcação da saída para o GARCH
+      saved.version = STATE_VERSION;
+      saved.adv = Object.assign({}, saved.adv || {}, { mcMethod: "fhs_garch", volModel: "gjr" });
+      if (!saved.adv.exitVolMode || saved.adv.exitVolMode === "rolling") saved.adv.exitVolMode = "garch";
+    }
     if (!saved || saved.version !== STATE_VERSION) {
       // estado de versão anterior: adota os novos padrões (estrutura de 3 meses, drift CDI, ajuste de regime),
       // mantendo só a ação e o valor investido
@@ -172,21 +179,27 @@
     hist: (a) => E.runHistorical(a.s, a.P, a.n, a.cost, a.monitoring, a.extra, a.cdiF, a.cdiRef, a.regimeAdjust),
     mc: (a) => E.runMonteCarlo(a.s, a.P, a.n, a.cost, a.o),
     hexit: (a) => E.runHistoricalExit(a.s, a.P, a.n, a.cost, a.cfg, a.cdiF, a.retHold, a.monitoring, a.extra, a.cdiRef, a.regimeAdjust),
-    mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra, a.high, a.low),
+    mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra, a.high, a.low, a.varPaths, a.garch, a.volScale),
     scen: (a) => E.runScenarios(a.s, a.P, a.n, a.cost, a.o),
+    calib: (a, progress) => E.walkForward(a.s, a.P, a.n, a.cost, a.o, progress),
   };
   try {
     const ver = ((document.querySelector('script[src*="core.js"]') || {}).src || "").split("?")[1] || "";
     worker = new Worker("assets/js/worker.js" + (ver ? "?" + ver : ""));
-    worker.onmessage = (ev) => { const p = pending.get(ev.data.id); if (!p) return; pending.delete(ev.data.id); ev.data.ok ? p.ok(ev.data.result) : p.fail(new Error(ev.data.error)); };
+    worker.onmessage = (ev) => {
+      const p = pending.get(ev.data.id); if (!p) return;
+      if (ev.data.progress != null) { if (p.onProgress) p.onProgress(ev.data.progress); return; }
+      pending.delete(ev.data.id); ev.data.ok ? p.ok(ev.data.result) : p.fail(new Error(ev.data.error));
+    };
     worker.onerror = () => { worker = null; pending.forEach((p) => p.retry()); pending.clear(); };
   } catch (e) { worker = null; }
-  App.call = function (type, args) {
-    const local = () => new Promise((ok, fail) => setTimeout(() => { try { ok(LOCAL[type](args)); } catch (e) { fail(e); } }, 20));
+  /* onProgress(fração): tarefas longas (calibração) avisam o andamento. */
+  App.call = function (type, args, onProgress = null) {
+    const local = () => new Promise((ok, fail) => setTimeout(() => { try { ok(LOCAL[type](args, onProgress)); } catch (e) { fail(e); } }, 20));
     if (!worker) return local();
     return new Promise((ok, fail) => {
       const id = ++seq;
-      pending.set(id, { ok, fail, retry: () => local().then(ok, fail) });
+      pending.set(id, { ok, fail, onProgress, retry: () => local().then(ok, fail) });
       worker.postMessage({ id, type, args });
     });
   };
@@ -273,15 +286,15 @@
     ctx.histPending = false;
     if (!live()) return;
     ctx.mcPending = true; push();
-    const o = { method: st.adv.mcMethod, nPaths: st.adv.mcPaths, block: st.adv.mcBlock, drift: st.adv.mcDrift, premium: st.adv.mcPremium, custom: st.adv.mcCustom, cdiAnnual: ctx.rateAnnual, seed: st.adv.mcSeed, monitoring: st.adv.monitoring, extra };
+    const o = { method: st.adv.mcMethod, volModel: st.adv.volModel, nPaths: st.adv.mcPaths, block: st.adv.mcBlock, drift: st.adv.mcDrift, premium: st.adv.mcPremium, custom: st.adv.mcCustom, cdiAnnual: ctx.rateAnnual, seed: st.adv.mcSeed, monitoring: st.adv.monitoring, extra };
     try { ctx.mc = await memo("mc:" + key + JSON.stringify(o), () => App.call("mc", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, o })); }
     catch (e) { ctx.mcError = e.message; }
     ctx.mcPending = false;
     if (!live()) return;
     // Grade de cenários (drift × vol): incerteza de premissa do Monte Carlo
     ctx.scenPending = true; push();
-    const so = { method: o.method, block: o.block, cdiAnnual: o.cdiAnnual, seed: o.seed, monitoring: o.monitoring, extra, premium: o.premium, nPaths: 5000 };
-    try { ctx.scen = await memo("scen:" + key + JSON.stringify(so), () => App.call("scen", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, o: so })); }
+    const so = { method: o.method, volModel: o.volModel, block: o.block, cdiAnnual: o.cdiAnnual, seed: o.seed, monitoring: o.monitoring, extra, premium: o.premium, nPaths: 5000 };
+    try { ctx.scen = await memo("scen:" + key + JSON.stringify(so), () => App.call("scen", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, o: Object.assign({ garch: ctx.mc ? ctx.mc.garch : null }, so) })); }
     catch (e) { ctx.scenError = e.message; }
     ctx.scenPending = false;
     if (!live()) return;
@@ -293,7 +306,7 @@
       try {
         if (ctx.hist) ctx.hexit = await memo("hexit:" + ek, () => App.call("hexit", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, cdiF: ctx.cdiF, retHold: ctx.hist.ret, monitoring: st.adv.monitoring, extra, cdiRef: ctx.rateAnnual, regimeAdjust: ctx.regimeAdjust }));
         if (!live()) return;
-        if (ctx.mc) ctx.mcexit = await memo("mcexit:" + ek + JSON.stringify(o), () => App.call("mcexit", { s, paths: ctx.mc.sample, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, retHold: ctx.mc.ret, sigma: ctx.mc.sigma, cdiAnnual: ctx.rateAnnual, monitoring: st.adv.monitoring, extra, high: ctx.mc.sampleH, low: ctx.mc.sampleL }));
+        if (ctx.mc) ctx.mcexit = await memo("mcexit:" + ek + JSON.stringify(o), () => App.call("mcexit", { s, paths: ctx.mc.sample, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, retHold: ctx.mc.ret, sigma: ctx.mc.sigma, cdiAnnual: ctx.rateAnnual, monitoring: st.adv.monitoring, extra, high: ctx.mc.sampleH, low: ctx.mc.sampleL, varPaths: ctx.mc.sampleV, garch: ctx.mc.garch, volScale: ctx.mc.volScale }));
       } catch (e) { ctx.exitError = e.message; }
       ctx.exitPending = false;
     }
@@ -311,7 +324,27 @@
 
   /* Parâmetros da saída antecipada no formato do motor. */
   App.exitCfg = (st) => ({ trigger: st.adv.exitTrigger, exitSpread: st.adv.exitSpread, delay: st.adv.exitDelay, minDays: st.adv.exitMinDays,
-    volMode: st.adv.exitVolMode, volWindow: 63, volAdd: st.adv.exitVolAdd, mcPaths: E.EXIT_PATHS, calibrate: st.adv.exitCalibrate });
+    volMode: st.adv.exitVolMode, volModel: st.adv.volModel || "gjr", volWindow: 63, volAdd: st.adv.exitVolAdd, mcPaths: E.EXIT_PATHS, calibrate: st.adv.exitCalibrate });
+
+  /* ---------------- Calibração walk-forward (sob demanda) ---------------- */
+  /* Chave dos parâmetros que mudam o teste: um resultado só é mostrado enquanto ela não mudar. */
+  App.calibKey = function (ctx) {
+    const st = App.state, a = st.adv;
+    return JSON.stringify([st.structure.legs, ctx.cost, ctx.ticker, a.adjusted, a.start, ctx.n, a.monitoring, ctx.extra, a.mcMethod, a.volModel, a.mcDrift, a.mcPremium, a.mcCustom, a.mcBlock, a.mcSeed, App.csv ? App.csv.d.length : 0]);
+  };
+  App.calib = { key: null, res: null, running: false, progress: 0, error: null };
+  App.runCalibration = async function (onUpdate) {
+    const ctx = App.ctx, st = App.state, a = st.adv, key = App.calibKey(ctx);
+    if (!ctx.ok || !ctx.P || App.calib.running) return;
+    Object.assign(App.calib, { key, res: null, running: true, progress: 0, error: null });
+    onUpdate();
+    const o = { method: a.mcMethod, volModel: a.volModel, drift: a.mcDrift, premium: a.mcPremium, custom: a.mcCustom, block: a.mcBlock, seed: a.mcSeed,
+      monitoring: a.monitoring, extra: ctx.extra, cdiF: ctx.cdiF, cdiAnnual: ctx.rateAnnual, step: 10, nPaths: 1000, refit: 252 };
+    try { App.calib.res = await App.call("calib", { s: st.structure, P: ctx.P, n: ctx.n, cost: ctx.cost, o }, (p) => { App.calib.progress = p; onUpdate(true); }); }
+    catch (e) { App.calib.error = e.message; }
+    App.calib.running = false;
+    onUpdate();
+  };
 
   /* Rótulos de prazo/estrutura para textos. */
   App.termText = (ctx) => `${App.fmt.int(ctx.n)} pregões (≈ ${App.fmt.num(ctx.n / 21, 1)} meses)` + (ctx.obs ? ` · apuração em ${App.fmt.date(ctx.obs)}` : "");
