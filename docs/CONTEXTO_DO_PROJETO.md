@@ -5,7 +5,7 @@
 > as decisões já tomadas, o estado atual e as armadilhas conhecidas. Detalhes de cálculo estão no
 > [README](../README.md); a metodologia em linguagem de usuário, em [METODOLOGIA.md](../METODOLOGIA.md).
 >
-> Última atualização: 29/10/2026 (inclui a saída antecipada e as Fases 1 e 2 da revisão metodológica).
+> Última atualização: 15/11/2026 (Fases 1 e 2 da revisão, guia em PDF e análise crítica de novembro).
 
 ## 1. Quem é o usuário e como trabalhar com ele
 
@@ -128,6 +128,14 @@
   `scripts/guia/montar_guia.py` (template `guia_template.html` → HTML → PDF, sumário com páginas via pypdf). PDF e
   imagens **não versionados** até o usuário autorizar (regra de mídia). Para refazer com dados novos: servir o site,
   rodar os dois scripts e revisar números citados no template (estão fixos no texto, com data de 28/10/2026).
+- **Análise crítica (15/11/2026, pedido do usuário; `docs/ANALISE_CRITICA_2026-11.md`):** objetivos de entrega
+  cumpridos; objetivo "contratar agora" cumprido em parte. Achados medidos (scripts `scripts/pesquisa/exp4…exp9`):
+  erros de dados do Yahoo não filtrados (saltos de 2–3× em B3SA3, PCAR3, NATU3, UGPA3, COGN3; preço parado em
+  PCAR3, SUZB3, TEND3, BHIA3…); GARCH degenerado em 15 de 94 ações; "IC 95%" cobre 82%–90%; grade de vol
+  ×0,8–×1,2 cobre 46% dos desfechos; FHS-GJR só ganha do chute fixo em > CDI e barreira (t ≈ 2,2–2,4) e empata
+  num evento só de vol; a média FHS + bootstrap + GBM ganha nos dois. **Nenhuma correção foi implementada**:
+  as recomendações (seção 6 do relatório) aguardam decisão do usuário. Lição: escolher modelo pela calibração do
+  evento, não pela previsão de variância (a variante de retornos limitados é a melhor em QLIKE e a pior no Brier).
 - **Bug antigo corrigido (desde `218b596`):** todas as páginas do site usam o mesmo `#view`; uma página já visitada
   continuava "viva" e se redesenhava por cima da atual a cada recálculo (e trocar a estrutura fora da aba Estrutura
   dava erro). Agora o roteador guarda `App.route` e cada página só se atualiza se for a rota atual.
