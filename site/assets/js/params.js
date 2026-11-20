@@ -196,6 +196,20 @@
     const rm = $("a-csv-rm"); if (rm) rm.addEventListener("click", (e) => { e.preventDefault(); App.csv = null; App.recompute(0); render(); });
   }
 
+  /* Avisos de qualidade dos dados da ação (gerados com a base do site): trecho inicial sem negociação cortado,
+     saltos de preço corrigidos (desdobramento não ajustado) e variações extremas de um dia (queda acima de 30% ou alta acima de 42%). */
+  function dataWarnings(ctx) {
+    const info = !App.csv && ctx.P && App.data.byTicker && App.data.byTicker[ctx.ticker], av = info && info.av;
+    if (!av) return "";
+    const from = ctx.P.d[0], out = [];
+    if (av.ini && App.state.adv.start < info.ini) out.push(`histórico antes de ${F.date(info.ini)} descartado (sem negociação real na fonte)`);
+    const fixed = (av.c || []).filter(([d]) => d >= from);
+    if (fixed.length) out.push(`${fixed.length === 1 ? "salto de preço corrigido" : fixed.length + " saltos de preço corrigidos"} (${fixed.map(([d, k]) => `${F.date(d)}, ${k}:1`).join("; ")})`);
+    const odd = (av.a || []).filter(([d]) => d >= from);
+    if (odd.length) out.push(`variação extrema de um dia em ${odd.map(([d, v]) => `${F.date(d)} (${F.pct(v, 0)})`).join(", ")}: evento real ou erro de ajuste da fonte — confira`);
+    return out.length ? "⚠ Dados: " + out.join(" · ") : "";
+  }
+
   /* Linha de status abaixo da barra (dados usados, prazo, cálculo em andamento). */
   function status(ctx) {
     const el = document.getElementById("p-status");
@@ -208,6 +222,8 @@
       parts.push(`<span><b>${esc(ctx.ticker)}</b>${info ? " · " + esc(info.n) : ""}</span>`);
       parts.push(`<span>${F.int(ctx.P.c.length)} pregões de ${F.date(ctx.P.d[0])} a ${F.date(ctx.P.d[ctx.P.d.length - 1])}</span>`);
     }
+    const dq = dataWarnings(ctx);
+    if (dq) parts.push(`<span style="color:var(--warn)">${dq}</span>`);
     if (ctx.n) parts.push(`<span>Prazo: <b>${App.termText(ctx)}</b></span>`);
     if (ctx.termError) parts.push(`<span class="neg">${esc(ctx.termError)}</span>`);
     if (isFinite(ctx.sigma)) parts.push(`<span>Vol. ${F.pct(ctx.sigma, 1, false)} a.a. · taxa ${F.pct(ctx.rateAnnual, 2, false)} a.a.</span>`);

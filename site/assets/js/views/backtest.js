@@ -155,7 +155,7 @@
       <p class="small muted" style="margin:-8px 0 12px"><b>${esc(ctx.ticker)}</b> · ${F.int(sm.n)} janelas de ${F.int(res.N)} pregões entre ${F.date(ctx.P.d[0])} e ${F.date(ctx.P.d[ctx.P.d.length - 1])} · amostra efetiva (não sobrepostas): <b>${F.int(sm.nEff)}</b> · monitoramento: ${E.MONITORING_LABELS[res.monitoring].toLowerCase()} · custo ${F.pct(ctx.cost, 2, false)}</p>
       <div class="card"><div class="kpi-strip">${UI.kpis(sm, st.invested, "janelas")}</div>
         <div class="card-note">${res.regimeAdjust ? `Caminhos re-ancorados no <b>CDI de hoje (${F.pct(ctx.rateAnnual, 2, false)} a.a.)</b>, preservando o excesso de retorno da ação sobre o CDI de cada época — “e se eu contratasse agora?”.` : `Ajuste ao CDI de hoje desligado: cada janela usa os juros da sua época.`}
-        Janelas vizinhas se sobrepõem: a amostra efetiva é de ≈ ${F.int(sm.nEff)} janelas independentes, daí as faixas (IC 95% por block bootstrap).
+        Janelas vizinhas se sobrepõem: são só ≈ ${F.int(sm.nEff)} janelas não sobrepostas, daí as faixas (IC 95% de Wilson com amostra efetiva de ${F.int(sm.n_ef_ic)}, 1,5 × as não sobrepostas).
         Em testes fora da amostra, a probabilidade de direção foi só um pouco mais precisa que a frequência histórica (confira no teste de calibração, na página Monte Carlo): use para comparar estruturas e dimensionar o risco de barreira.</div></div>
       <div class="card" style="margin-top:16px"><div class="card-h"><h3>Retorno de cada janela pela data de início</h3><span class="sub">cor = lucro / sem lucro · triângulo = barreira acionada</span></div>
         <div class="card-b"><div class="chart tall" id="b-ts"></div></div>

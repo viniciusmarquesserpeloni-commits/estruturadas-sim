@@ -267,6 +267,17 @@ try:
     else:
         with st.spinner(f"Baixando preços de {data.normalize_ticker(ticker)}…"):
             prices = cached_prices(ticker, hist_start, hist_end, price_kind.startswith("Ajustado"))
+        # filtro de qualidade: corta o início sem negociação e sinaliza saltos (sem referência de mercado, não corrige)
+        prices, data_av = data.clean_history(prices, repair=False, min_rows=30)
+        if data.has_warnings(data_av):
+            msgs = []
+            if data_av["inicio_original"] is not None:
+                msgs.append(f"histórico antes de {prices.index[0]:%d/%m/%Y} descartado (preço repetido, sem negociação real)")
+            if data_av["atipicos"]:
+                msgs.append("variação extrema de um dia em "
+                            + ", ".join(f"{d:%d/%m/%Y} ({fmt_pct(v, 0)})" for d, v in data_av["atipicos"])
+                            + ": evento real ou erro de ajuste do Yahoo — confira")
+            sb.warning("Dados: " + "; ".join(msgs) + ".")
     if prices is None or len(prices) < 30:
         raise ValueError("Histórico muito curto (menos de 30 pregões).")
 except Exception as exc:  # noqa: BLE001
@@ -625,7 +636,7 @@ def _kpis(container, s: dict, scen=None) -> None:
              (("p_lucro", "P(lucro)"), ("p_cdi", "P(> CDI de hoje)"), ("p_barreira", "P(barreira)"))
              if _band(s, key, scen)]
     if bands:
-        container.caption(("IC 95% (block bootstrap; janelas sobrepostas): " if s.get("ci") else
+        container.caption(("IC 95% (Wilson, amostra efetiva de 1,5 × as janelas não sobrepostas): " if s.get("ci") else
                            "Faixa entre os 9 cenários de premissa: ") + " · ".join(bands))
 
 
@@ -767,7 +778,12 @@ with tab_mc:
             st.plotly_chart(charts.vol_chart(prices, fit, n_days), key="vol_chart")
             st.caption("O GARCH estima a vol de cada dia a partir dos choques recentes (no GJR, quedas pesam mais). O "
                        "Monte Carlo parte da vol de hoje e a deixa voltar à média de longo prazo no ritmo da meia-vida; "
-                       "cada caminho reage aos próprios choques.")
+                       "cada caminho reage aos próprios choques. A vol de longo prazo é a do próprio histórico (alvo de "
+                       "variância).")
+            if vp["no_limite"]:
+                st.warning("Ajuste no limite (persistência ≥ 0,997): por este modelo a vol quase não volta à média, sinal "
+                           "de choque extremo recente ou de dado ruim no histórico. Trate este Monte Carlo com cautela e "
+                           "compare com o bootstrap em blocos.")
         if scen_res is not None:
             st.markdown("#### Sensibilidade às premissas (retorno esperado × vol)")
             lbl = {"zero": "Zero", "cdi": f"CDI ({fmt_pct(rate_annual, 1)})", "cdi_premio": f"CDI + {fmt_num(100 * mc_premium, 0)} p.p."}

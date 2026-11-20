@@ -24,7 +24,8 @@
       </div>
       <div class="card" style="margin-top:16px"><div class="card-h"><h3>Vol condicional × realizada</h3><span class="sub">últimos 3 anos + previsão para o prazo (tracejada)</span></div>
         <div class="card-b"><div class="chart" id="m-vol"></div></div>
-        <div class="card-note">O GARCH estima a vol de cada dia a partir dos choques recentes (quedas pesam mais no GJR). O Monte Carlo parte da vol de hoje e a deixa voltar para a média de longo prazo no ritmo da meia-vida; cada caminho reage aos próprios choques. Parâmetros estimados com ${F.int(g.n)} retornos diários.</div></div>`;
+        <div class="card-note">O GARCH estima a vol de cada dia a partir dos choques recentes (quedas pesam mais no GJR). O Monte Carlo parte da vol de hoje e a deixa voltar para a média de longo prazo no ritmo da meia-vida; cada caminho reage aos próprios choques. Dinâmica estimada com ${F.int(g.n)} retornos diários; a vol de longo prazo é a do próprio histórico (alvo de variância).</div>
+        ${vp.no_limite ? `<div class="warn-note" style="margin:0 16px 16px">Ajuste no limite (persistência ≥ 0,997): por este modelo a vol quase não volta à média, sinal de choque extremo recente ou de dado ruim no histórico. Trate este Monte Carlo com cautela e compare com o método Bootstrap em blocos (Mais opções).</div>` : ""}</div>`;
   }
   function mountVol(ctx, res) {
     const el = root.querySelector("#m-vol");
