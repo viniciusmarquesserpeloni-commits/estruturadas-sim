@@ -39,7 +39,7 @@ PDF = OUT_DIR / "Guia_Simulador_Estruturadas.pdf"
 PORT = 9334
 
 BLUE, ORANGE, GRAY, GRID, MUTED, INK = "#2a78d6", "#eb6834", "#7d8f95", "#e9ece7", "#7d8f95", "#0e2a33"
-SIGMA, CDI, T = 0.35, 0.1365, 63 / 252  # prêmio ilustrativo das estruturas só com opções
+SIGMA, CDI, T = 0.35, 0.14, 63 / 252  # prêmio ilustrativo das estruturas só com opções (vol 35%, CDI 14%)
 
 
 def fmt_pct(v: float, d: int = 2) -> str:
@@ -102,11 +102,27 @@ def payoff_svg(key: str, lo: float = 0.6, hi: float = 1.6, W: int = 340, H: int 
     return "".join(out)
 
 
-def fill(template: str, pages: dict[str, int] | None) -> str:
+NUMEROS = OUT_DIR / "numeros.json"
+
+
+def load_numbers() -> dict[str, str]:
+    """Números dos exemplos, calculados pelo motor do site na captura das telas (capturar_telas.py)."""
+    if not NUMEROS.exists():
+        sys.exit(f"Falta {NUMEROS} (rode capturar_telas.py)")
+    nums = json.loads(NUMEROS.read_text(encoding="utf-8"))
+    # texto puro (sem marcação HTML) e sinal de menos tipográfico
+    return {k: re.sub(r"(^|[\s(])-(?=\d)", r"\1−", re.sub(r"<[^>]+>", "", str(v))) for k, v in nums.items()}
+
+
+def fill(template: str, pages: dict[str, int] | None, nums: dict[str, str]) -> str:
     html = template
     for key in presets.PRESETS:
         html = html.replace(f"{{{{SVG:{key}}}}}", payoff_svg(key))
         html = html.replace(f"{{{{PREMIO:{key}}}}}", fmt_pct(premium(key)) + " do valor da ação")
+    missing = sorted(set(re.findall(r"\{\{N:(\w+)\}\}", html)) - set(nums))
+    if missing:
+        sys.exit(f"Números ausentes em numeros.json: {missing}")
+    html = re.sub(r"\{\{N:(\w+)\}\}", lambda m: nums[m.group(1)], html)
     return re.sub(r"\{\{P:(\w+)\}\}", lambda m: str(pages.get(m.group(1), "")) if pages else "", html)
 
 
@@ -132,7 +148,7 @@ def section_pages(pdf: Path) -> dict[str, int]:
 
 FOOTER = ('<div style="width:100%;font-family:Segoe UI,Arial,sans-serif;font-size:7.5px;color:#7d8f95;padding:0 16mm;'
           'display:flex;justify-content:space-between;"><span>Simulador de Operações Estruturadas · Guia completo · '
-          'outubro de 2026</span><span>página <span class="pageNumber"></span> de <span class="totalPages"></span></span></div>')
+          'novembro de 2026</span><span>página <span class="pageNumber"></span> de <span class="totalPages"></span></span></div>')
 
 
 def print_pdf(t: Tab, html: Path, pdf: Path) -> None:
@@ -167,11 +183,12 @@ def main() -> None:
                 time.sleep(0.3)
         t = Tab(page["webSocketDebuggerUrl"])
         t.cmd("Page.enable")
-        HTML.write_text(fill(template, None), encoding="utf-8")
+        nums = load_numbers()
+        HTML.write_text(fill(template, None, nums), encoding="utf-8")
         print_pdf(t, HTML, PDF)
         pages = section_pages(PDF)
         print("páginas das seções:", pages)
-        HTML.write_text(fill(template, pages), encoding="utf-8")
+        HTML.write_text(fill(template, pages, nums), encoding="utf-8")
         print_pdf(t, HTML, PDF)
         from pypdf import PdfReader
         n = len(PdfReader(str(PDF)).pages)
