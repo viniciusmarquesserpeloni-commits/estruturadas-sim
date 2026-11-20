@@ -61,6 +61,104 @@ def clean_prices(df: pd.DataFrame) -> pd.DataFrame:
     return df[["Open", "High", "Low", "Close"]].astype(float)
 
 
+# ---------------------------------------------------------------------------
+# Qualidade dos dados: saltos de preço e histórico sem negociação
+# ---------------------------------------------------------------------------
+
+JUMP_LOG = 0.35  # |log-retorno| de um dia a partir do qual a variação é atípica (−30% / +42%)
+MARKET_MOVE = 0.05  # mediana do mercado acima disso = dia de alta/queda geral (o salto é real)
+SPLIT_RATIOS = (2, 3, 4, 5, 10)  # razões de desdobramento/grupamento reconhecidas
+SPLIT_TOL = 0.04  # tolerância relativa para reconhecer a razão
+STALE_WINDOW = 252  # janela (pregões) para medir a fração de dias sem negociação
+STALE_MAX = 0.10  # fração máxima de dias parados aceita em qualquer janela do histórico usado
+PRICE_COLS = ("Open", "High", "Low", "Close", "Adj Close")
+
+
+def market_abs_move(closes: dict[str, pd.Series], min_names: int = 10) -> pd.Series:
+    """Mediana, entre as ações, do |log-retorno| de cada dia — para separar quedas gerais de saltos isolados.
+    Dias com menos de ``min_names`` ações ficam sem valor (NaN)."""
+    lr = pd.DataFrame({k: np.log(v).diff().abs() for k, v in closes.items()})
+    return lr.median(axis=1).where(lr.count(axis=1) >= min_names)
+
+
+def split_ratio(log_ret: float) -> int | None:
+    """Razão inteira (2, 3, 4, 5, 10) compatível com o salto, ou None."""
+    r = float(np.exp(abs(log_ret)))
+    for k in SPLIT_RATIOS:
+        if abs(r / k - 1.0) <= SPLIT_TOL:
+            return k
+    return None
+
+
+def stale_start(close, high=None, low=None, window: int = STALE_WINDOW, max_frac: float = STALE_MAX) -> int:
+    """Primeiro índice a partir do qual nenhuma janela de ``window`` pregões tem mais de ``max_frac`` de dias
+    parados (fechamento igual ao anterior e, se houver, máxima = mínima): descarta o trecho inicial em que o
+    papel ainda não negociava de fato (o Yahoo repete o último preço)."""
+    c = np.asarray(close, dtype=float)
+    n = len(c)
+    if n < 2:
+        return 0
+    flat = np.concatenate([[False], c[1:] == c[:-1]])
+    if high is not None and low is not None:
+        flat &= np.asarray(high, dtype=float) == np.asarray(low, dtype=float)
+    cs = np.concatenate([[0], np.cumsum(flat)])
+    w = min(window, n)
+    idx = np.arange(0, n - w + 1)
+    frac = (cs[idx + w] - cs[idx]) / w  # fração de dias parados na janela que começa em idx
+    bad = np.flatnonzero(frac > max_frac)
+    if len(bad) == 0:
+        return 0
+    start = int(bad[-1]) + 1
+    while start < n and flat[start]:  # começa num dia com negociação
+        start += 1
+    return start
+
+
+def clean_history(df: pd.DataFrame, market_abs: pd.Series | None = None, repair: bool = True,
+                  min_rows: int = 300) -> tuple[pd.DataFrame, dict]:
+    """Corrige e sinaliza problemas típicos do Yahoo. Devolve (dados, avisos).
+
+    1. **Salto isolado**: |log-retorno| de um dia acima de ``JUMP_LOG`` num dia em que o mercado não se moveu
+       junto (``market_abs`` abaixo de ``MARKET_MOVE``). Se a razão de preço for de desdobramento/grupamento
+       (2, 3, 4, 5 ou 10) e ``repair`` estiver ligado, todo o histórico anterior é reescalado — o salto é um
+       evento societário não ajustado, e as lâminas ajustam strikes e barreiras nesses eventos. Sem a
+       referência de mercado do dia (``market_abs`` ausente) nada é corrigido: os saltos só são sinalizados.
+       Os demais saltos ficam em ``atipicos`` (podem ser reais — resultado, recuperação judicial — ou erro).
+    2. **Trecho sem negociação** no início: cortado por ``stale_start`` (se sobrarem ao menos ``min_rows``).
+
+    avisos = {"corrigidos": [(data, razão, variação original)], "atipicos": [(data, variação)],
+              "inicio_original": data ou None}."""
+    out = df.copy()
+    ref = "Adj Close" if "Adj Close" in out.columns else "Close"
+    cols = [c for c in PRICE_COLS if c in out.columns]
+    avisos = {"corrigidos": [], "atipicos": [], "inicio_original": None}
+    lr = np.diff(np.log(out[ref].to_numpy(dtype=float)))
+    for j in np.flatnonzero(np.abs(lr) > JUMP_LOG):
+        day = out.index[j + 1]
+        m = np.nan if market_abs is None else market_abs.get(day, np.nan)
+        if np.isfinite(m) and m > MARKET_MOVE:
+            continue  # dia de queda/alta geral: salto real
+        k = split_ratio(lr[j])
+        if repair and np.isfinite(m) and k is not None:  # só corrige com o mercado do dia conhecido e calmo
+            factor = (1.0 / k) if lr[j] < 0 else float(k)
+            ci = [out.columns.get_loc(c) for c in cols]
+            out.iloc[: j + 1, ci] = out.iloc[: j + 1, ci].to_numpy(dtype=float) * factor
+            avisos["corrigidos"].append((day, k, float(np.expm1(lr[j]))))
+        else:
+            avisos["atipicos"].append((day, float(np.expm1(lr[j]))))
+    start = stale_start(out["Close"], out.get("High"), out.get("Low"))
+    if start > 0 and len(out) - start >= min_rows:
+        avisos["inicio_original"] = out.index[0]
+        out = out.iloc[start:]
+        avisos["atipicos"] = [a for a in avisos["atipicos"] if a[0] >= out.index[0]]
+        avisos["corrigidos"] = [a for a in avisos["corrigidos"] if a[0] >= out.index[0]]
+    return out, avisos
+
+
+def has_warnings(avisos: dict) -> bool:
+    return bool(avisos and (avisos["corrigidos"] or avisos["atipicos"] or avisos["inicio_original"] is not None))
+
+
 def load_prices_yf(ticker: str, start: date | str, end: date | str | None = None,
                    adjusted: bool = True) -> pd.DataFrame:
     """Baixa OHLC diário pelo yfinance. ``end`` é inclusivo."""

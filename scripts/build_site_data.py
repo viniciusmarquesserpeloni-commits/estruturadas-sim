@@ -9,6 +9,10 @@ Saída:
     site/data/cdi.json            CDI diário (SGS 12) e Selic meta (SGS 432)
     site/data/precos/XXXX.json    datas, fechamento bruto e ajustado, máxima e mínima brutas
 
+Filtro de qualidade (estruturadas.data.clean_history): saltos isolados com razão de desdobramento são
+corrigidos, os demais saltos acima de 35% num dia são sinalizados, e o trecho inicial sem negociação
+(preço repetido pelo Yahoo) é cortado. Os avisos de cada ação vão no index.json (campo "av").
+
 Ações sem dados recentes (deslistadas, ticker alterado) são ignoradas com aviso.
 O script falha (código 1) se menos da metade das ações vier — assim o deploy diário
 não substitui o site por uma versão incompleta.
@@ -77,7 +81,8 @@ def download(symbols: list[str], tries: int = 3) -> dict[str, pd.DataFrame]:
     return out
 
 
-def price_payload(ticker: str, raw: pd.DataFrame) -> dict | None:
+def prepare(ticker: str, raw: pd.DataFrame) -> pd.DataFrame | None:
+    """Padroniza o que veio do Yahoo: Close, Adj Close, High e Low positivos, um pregão por linha."""
     df = raw.copy()
     df.index = pd.to_datetime(df.index).normalize()
     df = df[~df.index.duplicated(keep="last")].sort_index()
@@ -86,18 +91,38 @@ def price_payload(ticker: str, raw: pd.DataFrame) -> dict | None:
     if len(df) < MIN_ROWS:
         print(f"  aviso: {ticker} tem só {len(df)} pregões; ignorada", file=sys.stderr)
         return None
-    adj = df["Adj Close"] if "Adj Close" in df else df["Close"]
-    adj = adj.where(np.isfinite(adj) & (adj > 0)).ffill().fillna(df["Close"])
-    high = df["High"].where(df["High"] > 0).fillna(df["Close"])
-    low = df["Low"].where(df["Low"] > 0).fillna(df["Close"])
+    close = df["Close"].astype(float)
+    adj = df["Adj Close"] if "Adj Close" in df else close
+    adj = adj.where(np.isfinite(adj) & (adj > 0)).ffill().fillna(close)
+    high = df["High"].where(df["High"] > 0).fillna(close)
+    low = df["Low"].where(df["Low"] > 0).fillna(close)
+    return pd.DataFrame({"Close": close, "Adj Close": adj.astype(float),
+                         "High": np.maximum(high.to_numpy(float), close.to_numpy(float)),
+                         "Low": np.minimum(low.to_numpy(float), close.to_numpy(float))}, index=df.index)
+
+
+def price_payload(ticker: str, df: pd.DataFrame) -> dict:
     return {
         "ticker": ticker,
         "d": [d.strftime("%Y-%m-%d") for d in df.index],
         "c": _r(df["Close"].to_numpy(float)),
-        "ca": _r(adj.to_numpy(float), 6),
-        "h": _r(np.maximum(high.to_numpy(float), df["Close"].to_numpy(float))),
-        "l": _r(np.minimum(low.to_numpy(float), df["Close"].to_numpy(float))),
+        "ca": _r(df["Adj Close"].to_numpy(float), 6),
+        "h": _r(df["High"].to_numpy(float)),
+        "l": _r(df["Low"].to_numpy(float)),
     }
+
+
+def warnings_payload(av: dict) -> dict:
+    """Avisos de qualidade no formato do index.json: c = saltos corrigidos [data, razão]; a = variações
+    atípicas [data, variação]; ini = início original do histórico (quando o trecho inicial foi cortado)."""
+    out = {}
+    if av["corrigidos"]:
+        out["c"] = [[d.strftime("%Y-%m-%d"), k] for d, k, _ in av["corrigidos"]]
+    if av["atipicos"]:
+        out["a"] = [[d.strftime("%Y-%m-%d"), round(v, 4)] for d, v in av["atipicos"]]
+    if av["inicio_original"] is not None:
+        out["ini"] = av["inicio_original"].strftime("%Y-%m-%d")
+    return out
 
 
 def main(argv: list[str]) -> int:
@@ -106,10 +131,19 @@ def main(argv: list[str]) -> int:
 
     print(f"Baixando {len(wanted)} ações desde {START}…")
     raw = download(wanted)
-    payloads = {t: p for t in wanted if t in raw and (p := price_payload(t, raw[t])) is not None}
-    if not payloads:
+    frames = {t: f for t in wanted if t in raw and (f := prepare(t, raw[t])) is not None}
+    if not frames:
         print("erro: nenhuma ação baixada", file=sys.stderr)
         return 1
+    # filtro de qualidade: saltos isolados (com a mediana do mercado como referência) e início sem negociação
+    market = sdata.market_abs_move({t: f["Adj Close"] for t, f in frames.items()})
+    payloads, avisos = {}, {}
+    for t, f in frames.items():
+        clean, av = sdata.clean_history(f, market, min_rows=MIN_ROWS)
+        payloads[t] = price_payload(t, clean)
+        avisos[t] = warnings_payload(av)
+        if avisos[t]:
+            print(f"  dados {t}: {avisos[t]}", file=sys.stderr)
     last_global = max(pd.Timestamp(p["d"][-1]) for p in payloads.values())
     fresh = {}
     for t, p in payloads.items():
@@ -125,8 +159,11 @@ def main(argv: list[str]) -> int:
     for t, p in sorted(fresh.items()):
         (OUT / "precos" / f"{t}.json").write_text(json.dumps(p, separators=(",", ":")), encoding="utf-8")
         close = pd.Series(p["ca"], dtype=float)
-        index.append({"t": t, "n": TICKERS.get(t, t), "ini": p["d"][0], "fim": p["d"][-1],
-                      "vol": round(sdata.historical_vol(close), 4)})
+        entry = {"t": t, "n": TICKERS.get(t, t), "ini": p["d"][0], "fim": p["d"][-1],
+                 "vol": round(sdata.historical_vol(close), 4)}
+        if avisos.get(t):
+            entry["av"] = avisos[t]
+        index.append(entry)
     # remove arquivos de ações que saíram da lista
     for f in (OUT / "precos").glob("*.json"):
         if f.stem not in fresh:
