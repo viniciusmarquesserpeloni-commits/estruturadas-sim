@@ -190,7 +190,7 @@ test("saída antecipada: regras (delay, carência, vencimento) e Monte Carlo", (
   // Monte Carlo: caminhos completos guardados + saída nos 2.000 primeiros
   const Pf = { d: FX.prices.d, c: Float64Array.from(FX.prices.c), h: Float64Array.from(FX.prices.h), l: Float64Array.from(FX.prices.l) };
   const pt = E.PRESETS.protecao_total.build();
-  const mc = E.runMonteCarlo(pt, Pf, 60, 0, { nPaths: 3000, cdiAnnual: 0.1 });
+  const mc = E.runMonteCarlo(pt, Pf, 60, 0, { nPaths: 3000, cdiAnnual: 0.1, method: "bootstrap" });
   assert.equal(mc.sample.length, 2000);
   const em = E.runMcExit(pt, mc.sample, 60, 0, {}, mc.ret, mc.sigma, 0.1);
   assert.equal(em.n, 2000);
@@ -280,7 +280,7 @@ test("fase 2: ajuste GARCH/GJR (Nelder-Mead) igual ao Python", () => {
   }
   assert.ok(F2.fits.gjr.gamma > 0.02, "GJR detecta a assimetria simulada");
   const g2 = pyFit(lr, F2.fits.gjr, "gjr", up, dn), vp = E.volPanel(g2, lr, 63);
-  for (const k of ["vol_hoje", "vol_longo_prazo", "vol_prazo", "vol_realizada", "meia_vida", "persistencia"]) close(vp[k], F2.panel[k], 1e-10, "painel " + k);
+  for (const k of ["vol_hoje", "vol_longo_prazo", "vol_prazo", "vol_prazo_garch", "vol_252", "vol_realizada", "meia_vida", "persistencia"]) close(vp[k], F2.panel[k], 1e-10, "painel " + k);
   for (const [h1, m, v] of F2.term_vol) close(E.termVol(g2, h1, m), v, 1e-12, `vol do prazo ${h1} ${m}`);
 });
 
@@ -329,7 +329,36 @@ test("fase 2: saída antecipada marcada com GARCH e calibração walk-forward ig
   // os ajustes do GARCH em cada data podem diferir na 8ª casa (otimizador), então as previsões têm tolerância de poucos caminhos
   for (const k of ["prev_lucro", "prev_cdi", "prev_barreira"]) closeArr(res.rows.map((r) => r[k]), c.rows[k], 0.011, k);
   const br = E.calibBrier(res);
-  for (const b of c.brier) { const j = br.find((x) => x.chave === b.chave); close(j.brier_chute, b.brier_chute, 1e-12, "Brier chute " + b.chave); close(j.brier_modelo, b.brier_modelo, 0.01, "Brier modelo " + b.chave); }
+  for (const b of c.brier) {
+    const j = br.find((x) => x.chave === b.chave);
+    close(j.brier_chute, b.brier_chute, 1e-12, "Brier chute " + b.chave); close(j.brier_modelo, b.brier_modelo, 0.01, "Brier modelo " + b.chave);
+    close(j.t, b.t, 0.5, "t " + b.chave);
+  }
   const rel = E.calibReliability(res, "barreira");
   assert.equal(rel.reduce((a, r) => a + r.n, 0), res.rows.length);
+});
+
+/* ---------------- Correções de novembro (prioridade 2) ---------------- */
+test("prioridade 2: vol combinada com 252 pregões, média dos 3 métodos e saída por partes", () => {
+  const P = P2(), { lr, up, dn } = E.ohlcLogReturns(P), g = pyFit(lr, F2.fits.gjr, "gjr", up, dn);
+  const k = E.blendScale(g, lr, 63), fg = E.termVar(g, g.hNext, 63), fr = E.realizedVar(lr);
+  close(k * k * fg, Math.sqrt(fg * fr), 1e-12, "variância combinada = média geométrica");
+  const s = E.PRESETS.collar_ki.build(1.0, 1.06, 1.12);
+  const a = E.runMonteCarlo(s, P, 63, 0, { method: "fhs_garch", nPaths: 2000, cdiAnnual: 0.12, garch: g });
+  const b = E.runMonteCarlo(s, P, 63, 0, { method: "fhs_garch", nPaths: 2000, cdiAnnual: 0.12, garch: g, volBlend: false });
+  close(a.sigma / b.sigma, k, 1e-12, "sigma combinada"); close(a.volScaleEff, k, 1e-12, "escala efetiva");
+  const m = E.runMonteCarlo(s, P, 63, 0, { nPaths: 6000, cdiAnnual: 0.12 });
+  assert.equal(m.method, "media"); assert.deepEqual(m.parts.map((p) => p.method), ["fhs_garch", "bootstrap", "gbm"]);
+  const sm = E.summarize(m), avg = (key) => m.partsSummary.reduce((x, p) => x + p[key], 0) / 3;
+  close(sm.p_lucro, avg("p_lucro"), 1e-12, "P(lucro) = média dos métodos"); close(sm.p_barreira, avg("p_barreira"), 1e-12, "P(barreira) = média");
+  assert.equal(m.sample.length, 3 * Math.ceil(E.EXIT_PATHS / 3));
+  const parts = m.parts.map((p) => ({ paths: p.sample, retHold: p.ret, sigma: p.sigma, high: p.sampleH, low: p.sampleL, varPaths: p.sampleV, garch: p.garch, volScale: p.volScaleEff }));
+  const ex = E.runMcExitParts(s, parts, 63, 0, {}, 0.12);
+  assert.equal(ex.n, 3 * Math.floor(E.EXIT_PATHS / 3));
+  const sx = E.summarizeExit(ex); assert.ok(sx.p_saida >= 0 && sx.p_saida <= 1);
+  const g2 = E.runScenarios(s, P, 63, 0, { cdiAnnual: 0.12, nPaths: 1500, garch: g });
+  assert.deepEqual([...new Set(g2.map((r) => r.volScale))], [0.6, 1.0, 1.3]);
+  // estatística t com variância de longo prazo: série constante não tem t; série com média positiva tem t > 0
+  assert.ok(Number.isNaN(E.hacT([1, 1, 1, 1], 2)));
+  assert.ok(E.hacT(Array.from({ length: 200 }, (_, i) => 0.01 + 0.02 * Math.sin(i)), 5) > 2);
 });

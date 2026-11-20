@@ -176,6 +176,24 @@
     return pack(rows, retHold, N, { kind: "mc", cfg });
   };
 
+  /* Saída antecipada a partir das partes do Monte Carlo (um método = uma parte; na média dos 3, cada método com
+     1/3 dos caminhos da saída e a sua própria marcação de vol). parts = [{paths, retHold, sigma, high, low, varPaths,
+     garch, volScale}]; os resultados são juntados. */
+  E.runMcExitParts = function (s, parts, N, cost, cfg, cdiAnnual, monitoring = "close", extra = 0) {
+    cfg = Object.assign({}, E.EXIT_DEFAULTS, cfg);
+    const sub = Object.assign({}, cfg, { mcPaths: Math.max(1, Math.floor(cfg.mcPaths / parts.length)) });
+    const res = parts.map((p) => E.runMcExit(s, p.paths, N, cost, parts.length > 1 ? sub : cfg, p.retHold, p.sigma, cdiAnnual, monitoring, extra,
+      p.high, p.low, p.varPaths, p.garch, p.volScale));
+    if (res.length === 1) return res[0];
+    const out = { N, kind: "mc", cfg, n: res.reduce((a, x) => a + x.n, 0) };
+    for (const k of ["triggered", "triggerDay", "early", "exitDay", "retFinal", "retHold", "cdiPeriod"]) {
+      const arr = new res[0][k].constructor(out.n);
+      let i = 0; for (const x of res) { arr.set(x[k], i); i += x.n; }
+      out[k] = arr;
+    }
+    return out;
+  };
+
   /* Marcação diária e gatilho no caminho realizado de uma operação (nTotal = pregões até a apuração). */
   E.runExPostExit = function (s, P, trade, nTotal, cost, cfg, cdiF, monitoring = "close", extra = 0) {
     cfg = Object.assign({}, E.EXIT_DEFAULTS, cfg);

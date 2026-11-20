@@ -9,7 +9,7 @@
   E.CALIB_EVENTS = [["lucro", "P(lucro > 0)"], ["cdi", "P(retorno > CDI)"], ["barreira", "P(barreira acionada)"]];
 
   E.walkForward = function (s, P, N, cost, o = {}, progress = null) {
-    const method = o.method || "fhs_garch", step = o.step || 10, nPaths = o.nPaths || 1000, refit = o.refit || 252;
+    const method = o.method || "media", step = o.step || 10, nPaths = o.nPaths || 1000, refit = o.refit || 252;
     const volModel = o.volModel || "gjr", cdiAnnual = o.cdiAnnual ?? 0.10, cdiF = o.cdiF || null;
     const n = P.c.length, start = Math.max(o.start || 504, N + 252), dates = [];
     for (let t = start; t < n - N; t += step) dates.push(t);
@@ -32,7 +32,7 @@
       const sub = { d: P.d.slice(0, t + 1), c: P.c.subarray(0, t + 1), h: P.h.subarray(0, t + 1), l: P.l.subarray(0, t + 1) };
       const rate = cdiF ? Math.pow(cdiF[t] / cdiF[t - 1], TD) - 1 : cdiAnnual;
       let g = null;
-      if (method === "fhs_garch") {
+      if (method === "fhs_garch" || method === "media") {
         const lr = all.lr.subarray(0, t), up = all.up.subarray(0, t), dn = all.dn.subarray(0, t);
         if (!fit || t - fitT >= refit) { fit = E.garchFit(lr, volModel, up, dn); fitT = t; g = fit; }
         else g = E.garchFiltered(lr, fit.omega, fit.alpha, fit.gamma, fit.beta, volModel, up, dn);
@@ -52,17 +52,35 @@
   };
 
   const eventsOf = (res) => E.CALIB_EVENTS.filter(([k]) => res.rows.length && ("prev_" + k) in res.rows[0]);
-  /* Brier do modelo × do chute fixo e ganho relativo (1 − modelo/chute). */
+  E.T_SIGNIF = 2;
+  /* Estatística t da média de x com variância de longo prazo de Newey-West (pesos de Bartlett): as janelas se sobrepõem. */
+  E.hacT = function (x, lags) {
+    const n = x.length;
+    if (n < 3) return NaN;
+    let m = 0; for (let i = 0; i < n; i++) m += x[i]; m /= n;
+    const d = x.map((v) => v - m);
+    let v = 0; for (let i = 0; i < n; i++) v += d[i] * d[i]; v /= n;
+    for (let k = 1; k <= Math.min(lags, n - 1); k++) {
+      let c = 0; for (let i = k; i < n; i++) c += d[i] * d[i - k];
+      v += 2 * (1 - k / (lags + 1)) * c / n;
+    }
+    return v > 0 ? m / Math.sqrt(v / n) : NaN;
+  };
+  /* Brier do modelo × do chute fixo, ganho relativo (1 − modelo/chute) e estatística t de Diebold-Mariano da diferença
+     (positiva = modelo melhor; |t| ≥ 2 ≈ significativo a 5%). */
   E.calibBrier = function (res) {
+    const lags = Math.ceil(res.N / res.step) + 2;
     return eventsOf(res).map(([k, label]) => {
       let bm = 0, bc = 0, pm = 0, cm = 0, y = 0;
+      const diff = [];
       for (const r of res.rows) {
         const yy = r["real_" + k], p = r["prev_" + k], c = r["clim_" + k];
         bm += (p - yy) * (p - yy); bc += (c - yy) * (c - yy); pm += p; cm += c; y += yy;
+        diff.push((c - yy) * (c - yy) - (p - yy) * (p - yy));
       }
       const n = res.rows.length;
       return { indicador: label, chave: k, brier_modelo: bm / n, brier_chute: bc / n, ganho: bc > 0 ? 1 - bm / bc : NaN,
-        prev_media: pm / n, chute_medio: cm / n, real: y / n, n };
+        t: E.hacT(diff, lags), prev_media: pm / n, chute_medio: cm / n, real: y / n, n };
     });
   };
   /* Diagrama de confiabilidade: previsões em faixas de 10 p.p. × frequência realizada. */

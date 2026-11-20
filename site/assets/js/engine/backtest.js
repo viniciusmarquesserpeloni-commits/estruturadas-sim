@@ -5,7 +5,8 @@
   const E = root.Estr;
   const TD = 252, TOL = 1e-9;
   E.DRIFT_LABELS = { cdi: "CDI", cdi_premio: "CDI + prêmio", zero: "Zero", historico: "Histórico (média do período)", personalizado: "Personalizado" };
-  E.MC_METHOD_LABELS = { fhs_garch: "FHS-GARCH (vol condicional)", bootstrap: "Bootstrap em blocos", gbm: "GBM (log-normal)" };
+  E.MC_METHOD_LABELS = { media: "Média dos 3 métodos (recomendado)", fhs_garch: "FHS-GARCH (vol condicional)", bootstrap: "Bootstrap em blocos", gbm: "GBM (log-normal)" };
+  E.ENSEMBLE = ["fhs_garch", "bootstrap", "gbm"]; // métodos combinados em "media"
   E.EXIT_PATHS = 2000; // caminhos completos guardados (gráfico usa 100; saída antecipada usa todos)
 
   /* ---------------- Datas e calendário ---------------- */
@@ -223,17 +224,21 @@
   };
   /* FHS-GARCH (padrão): parte da vol de hoje do GARCH/GJR e sorteia choques padronizados reais (com máxima e
      mínima do dia); o.garch reaproveita um ajuste já feito (cenários, calibração). */
+  /* Média dos 3 métodos (padrão): FHS, bootstrap e GBM com nPaths/3 caminhos cada, juntos (média das probabilidades).
+     Com o.volBlend (padrão), a vol do prazo do FHS é combinada com a realizada de 252 pregões (E.blendScale). */
   E.runMonteCarlo = function (s, P, N, cost, o = {}) {
-    const method = o.method || "fhs_garch", nPaths = o.nPaths || 10000, block = o.block || 20, drift = o.drift || "cdi";
+    const method = o.method || "media", nPaths = o.nPaths || 10000, block = o.block || 20, drift = o.drift || "cdi";
+    if (method === "media") return runEnsemble(s, P, N, cost, o, nPaths);
     const cdiAnnual = o.cdiAnnual ?? 0.10, seed = o.seed ?? 42, monitoring = o.monitoring || "close", extra = o.extra || 0;
     const premium = o.premium ?? 0.05, custom = o.custom ?? null, volScale = o.volScale ?? 1, keep = o.keep ?? E.EXIT_PATHS;
     const volModel = o.volModel || "gjr";
     const { lr, up, dn } = E.ohlcLogReturns(P);
     const g = method === "fhs_garch" ? o.garch || E.garchFit(lr, volModel, up, dn) : null;
-    const sigmaBase = g ? E.termVol(g, g.hNext, N) : Math.sqrt(varOf(lr) * TD), sigma = sigmaBase * volScale, mu = E.driftAnnual(drift, cdiAnnual, premium, custom);
+    const blend = g && o.volBlend !== false ? E.blendScale(g, lr, N) : 1, volScaleEff = volScale * blend;
+    const sigmaBase = g ? E.termVol(g, g.hNext, N) * blend : Math.sqrt(varOf(lr) * TD), sigma = sigmaBase * volScale, mu = E.driftAnnual(drift, cdiAnnual, premium, custom);
     let sum, shift = 0;
     if (method === "fhs_garch") {
-      sum = E.fhsSummary(g, nPaths, N, seed, E.fhsDriftDaily(lr, mu, volScale), volScale, keep, monitoring === "intraday");
+      sum = E.fhsSummary(g, nPaths, N, seed, E.fhsDriftDaily(lr, mu, volScaleEff), volScaleEff, keep, monitoring === "intraday");
     } else if (method === "bootstrap") {
       sum = E.blockBootstrapSummary(lr, nPaths, N, block, seed, keep, { driftDaily: E.bootstrapDriftDaily(lr, mu, volScale), scale: volScale, up, dn, intraday: monitoring === "intraday" });
     } else if (method === "gbm") {
@@ -245,21 +250,41 @@
     r.cdi = new Float64Array(n).fill(Math.pow(1 + cdiAnnual, N / TD) - 1);
     r.cdiHoje = r.cdi[0];
     return Object.assign(r, { kind: "mc", N, n, nEff: n, sample: sum.sample, sampleH: sum.sampleH || null, sampleL: sum.sampleL || null,
-      sampleV: sum.sampleV || null, garch: g, volModel, sigma, sigmaBase, volScale, mu, premium, method, drift, block, seed, monitoring });
+      sampleV: sum.sampleV || null, garch: g, volModel, sigma, sigmaBase, volScale, volScaleEff, mu, premium, method, drift, block, seed, monitoring });
   };
 
+  const probs = (r) => {
+    let luc = 0, cdi = 0, bar = 0, sum = 0;
+    for (let i = 0; i < r.n; i++) { const v = r.ret[i]; if (v > TOL) luc++; if (v > r.cdiHoje + TOL) cdi++; if (r.anyHit[i]) bar++; sum += v; }
+    return { p_lucro: luc / r.n, p_cdi: cdi / r.n, p_barreira: r.events.length ? bar / r.n : NaN, media: sum / r.n };
+  };
+  const concat = (arrs) => { const out = new arrs[0].constructor(arrs.reduce((a, x) => a + x.length, 0)); let k = 0; for (const x of arrs) { out.set(x, k); k += x.length; } return out; };
+  function runEnsemble(s, P, N, cost, o, nPaths) {
+    let g = o.garch;
+    if (!g) { const x = E.ohlcLogReturns(P); g = E.garchFit(x.lr, o.volModel || "gjr", x.up, x.dn); }
+    const per = Math.ceil(nPaths / E.ENSEMBLE.length), keep = Math.ceil((o.keep ?? E.EXIT_PATHS) / E.ENSEMBLE.length);
+    const parts = E.ENSEMBLE.map((m) => E.runMonteCarlo(s, P, N, cost, Object.assign({}, o, { method: m, nPaths: per, keep, garch: m === "fhs_garch" ? g : null })));
+    const f = parts[0], cat = (k) => concat(parts.map((p) => p[k])), hits = {};
+    for (const e of f.events) hits[e.key] = concat(parts.map((p) => p.hits[e.key]));
+    const sample = [], k = Math.min(...parts.map((p) => p.sample.length));
+    for (let i = 0; i < k; i++) for (const p of parts) sample.push(p.sample[i]); // intercalados: o gráfico mistura os três
+    const r = { ret: cat("ret"), stock: cat("stock"), payoff: cat("payoff"), sT: cat("sT"), anyHit: cat("anyHit"), cdi: cat("cdi"), hits, events: f.events, retMax: f.retMax };
+    const n = r.ret.length;
+    return Object.assign(r, { kind: "mc", N, n, nEff: n, cdiHoje: f.cdiHoje, sample, sampleH: null, sampleL: null, sampleV: null, garch: g,
+      volModel: f.volModel, sigma: f.sigma, sigmaBase: f.sigmaBase, volScale: f.volScale, volScaleEff: f.volScaleEff, mu: f.mu, premium: f.premium,
+      method: "media", drift: f.drift, block: f.block, seed: f.seed, monitoring: f.monitoring,
+      parts, partsSummary: parts.map((p) => Object.assign({ method: p.method, sigma: p.sigma }, probs(p))) });
+  }
+
   E.SCENARIO_DRIFTS = ["zero", "cdi", "cdi_premio"];
-  E.SCENARIO_VOLS = [0.8, 1.0, 1.2];
+  E.SCENARIO_VOLS = [0.6, 1.0, 1.3]; // ≈ percentis 10 e 90 do erro histórico da previsão de vol em 3 meses
   /* Grade de premissas do Monte Carlo (incerteza de premissa, não de sorteio): drift × vol, mesmos sorteios. */
   E.runScenarios = function (s, P, N, cost, o = {}) {
     const rows = [];
-    if ((o.method || "fhs_garch") === "fhs_garch" && !o.garch) { const x = E.ohlcLogReturns(P); o = Object.assign({}, o, { garch: E.garchFit(x.lr, o.volModel || "gjr", x.up, x.dn) }); }
+    if (["fhs_garch", "media"].includes(o.method || "media") && !o.garch) { const x = E.ohlcLogReturns(P); o = Object.assign({}, o, { garch: E.garchFit(x.lr, o.volModel || "gjr", x.up, x.dn) }); }
     for (const drift of E.SCENARIO_DRIFTS) for (const vs of E.SCENARIO_VOLS) {
       const r = E.runMonteCarlo(s, P, N, cost, Object.assign({}, o, { drift, volScale: vs, nPaths: o.nPaths || 5000, keep: 0 }));
-      let luc = 0, cdi = 0, bar = 0, sum = 0;
-      for (let i = 0; i < r.n; i++) { const v = r.ret[i]; if (v > TOL) luc++; if (v > r.cdiHoje + TOL) cdi++; if (r.anyHit[i]) bar++; sum += v; }
-      rows.push({ drift, mu: r.mu, volScale: vs, sigma: r.sigma, p_lucro: luc / r.n, p_cdi: cdi / r.n,
-        p_barreira: r.events.length ? bar / r.n : NaN, media: sum / r.n });
+      rows.push(Object.assign({ drift, mu: r.mu, volScale: vs, sigma: r.sigma }, probs(r)));
     }
     return rows;
   };

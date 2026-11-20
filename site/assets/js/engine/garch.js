@@ -136,13 +136,38 @@
   /* E[h_{T+k}] dado h_{T+1} = h1. */
   E.expectedVar = (g, h1, k) => g.longRunVar + Math.pow(g.persistence, k - 1) * (h1 - g.longRunVar);
 
+  /* Variância diária realizada dos últimos 252 pregões (média dos retornos², soma sequencial como no Python). */
+  E.BLEND_WINDOW = 252;
+  E.realizedVar = function (lr, window = E.BLEND_WINDOW) {
+    const i0 = Math.max(0, lr.length - window);
+    let s = 0; for (let i = i0; i < lr.length; i++) s += lr[i] * lr[i];
+    return s / (lr.length - i0);
+  };
+  /* Fator que leva a vol do prazo do GARCH à média geométrica com a vol realizada de 252 pregões (ver blend_scale
+     no Python): o GARCH sozinho superestimava a variância do prazo; a combinação ficou sem viés. */
+  E.blendScale = function (g, lr, N) {
+    const fg = E.termVar(g, g.hNext, N), fr = E.realizedVar(lr);
+    return fg > 0 && fr > 0 ? Math.sqrt(Math.sqrt(fg * fr) / fg) : 1;
+  };
+  /* Vol prevista para o prazo (GARCH combinado com 252 pregões): a usada no Monte Carlo e no modo Teórico.
+     null se o histórico for curto demais para o GARCH. */
+  E.termVolForecast = function (P, N, model = "gjr") {
+    const { lr, up, dn } = E.ohlcLogReturns(P);
+    let g;
+    try { g = E.garchFit(lr, model, up, dn); } catch (e) { return null; }
+    const garch = E.termVol(g, g.hNext, N);
+    return { sigma: garch * E.blendScale(g, lr, N), garch, realizada252: Math.sqrt(E.realizedVar(lr) * TD), atLimit: g.atLimit };
+  };
+
   /* Resumo para o painel de volatilidade (anualizado). */
   E.volPanel = function (g, lr, N, window = 63) {
     const tail = lr.slice(Math.max(0, lr.length - window));
     let m = 0; for (let i = 0; i < tail.length; i++) m += tail[i]; m /= tail.length;
     let v = 0; for (let i = 0; i < tail.length; i++) v += (tail[i] - m) * (tail[i] - m);
+    const garchPrazo = E.termVol(g, g.hNext, N);
     return { modelo: E.VOL_MODEL_LABELS[g.model], vol_hoje: Math.sqrt(g.hNext * TD), vol_longo_prazo: Math.sqrt(g.longRunVar * TD),
-      vol_prazo: E.termVol(g, g.hNext, N), vol_realizada: tail.length > 1 ? Math.sqrt(v / (tail.length - 1) * TD) : NaN,
+      vol_prazo: garchPrazo * E.blendScale(g, lr, N), vol_prazo_garch: garchPrazo, vol_252: Math.sqrt(E.realizedVar(lr) * TD),
+      vol_realizada: tail.length > 1 ? Math.sqrt(v / (tail.length - 1) * TD) : NaN,
       meia_vida: g.halfLife, persistencia: g.persistence, no_limite: g.atLimit, alpha: g.alpha, gamma: g.gamma, beta: g.beta, omega: g.omega, n: g.n, bic: g.bic };
   };
 
