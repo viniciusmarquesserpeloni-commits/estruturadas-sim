@@ -97,7 +97,11 @@ def test_mc_intraday_with_sampled_high_low_and_cvar():
     a = run_monte_carlo(s, px, 63, 0.0, n_paths=4000, cdi_annual=0.12, monitoring="close")
     b = run_monte_carlo(s, px, 63, 0.0, n_paths=4000, cdi_annual=0.12, monitoring="intraday")
     assert b.df["barreira_qualquer"].mean() >= a.df["barreira_qualquer"].mean()
-    assert b.meta["paths_exit_high"].shape == b.meta["paths_exit"].shape
+    for part in b.meta["parts"]:  # média dos 3 métodos: cada parte guarda os seus caminhos
+        if part.meta["method"] != "gbm":
+            assert part.meta["paths_exit_high"].shape == part.meta["paths_exit"].shape
+    assert [x["method"] for x in b.meta["parts_summary"]] == ["fhs_garch", "bootstrap", "gbm"]
+    assert b.df["barreira_qualquer"].mean() == pytest.approx(np.mean([x["p_barreira"] for x in b.meta["parts_summary"]]), abs=1e-3)
     sm = summarize(a)
     assert sm["cvar5"] <= sm["p5"] + 1e-12 and sm["ci"] == {}  # MC: sem IC de sorteio
     assert cvar([1, 2, 3, 4], 0.5) == 1.5
@@ -111,7 +115,7 @@ def test_scenario_grid_monotonicity():
     for drift in ("zero", "cdi", "cdi_premio"):
         sub = g[g.drift == drift].sort_values("vol_scale")
         assert sub["p_barreira"].is_monotonic_increasing  # mais vol, mais toque na barreira de alta
-    for vs in (0.8, 1.0, 1.2):
+    for vs in (0.6, 1.0, 1.3):
         sub = g[g.vol_scale == vs].set_index("drift")
         assert sub.loc["zero", "p_lucro"] <= sub.loc["cdi", "p_lucro"] <= sub.loc["cdi_premio", "p_lucro"]
 

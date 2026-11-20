@@ -5,7 +5,7 @@ import pytest
 from estruturadas import presets
 from estruturadas.backtest import run_historical, run_monte_carlo
 from estruturadas.early_exit import (EarlyExitConfig, cdi_rate_series, rolling_vol, run_ex_post_exit,
-                                     run_historical_exit, run_mc_exit, simulate_exit, structure_value)
+                                     run_historical_exit, run_mc_exit, run_mc_exit_result, simulate_exit, structure_value)
 from estruturadas.legs import Leg, Structure
 from estruturadas.metrics import exit_by_cdi_regime, summarize_exit
 from estruturadas.pricing import barrier_price, bs_price, bs_price_vec, make_mc_context, mc_price_leg
@@ -110,10 +110,14 @@ def test_historical_mc_and_expost_run():
     sm = summarize_exit(ee)
     assert 0 <= sm["p_saida"] <= 1 and sm["dias_medio"] <= 120
     assert not exit_by_cdi_regime(ee).empty
-    m = run_monte_carlo(s, px, 120, 0.0, n_paths=3000, cdi_annual=0.10)
+    m = run_monte_carlo(s, px, 120, 0.0, "bootstrap", n_paths=3000, cdi_annual=0.10)
     em = run_mc_exit(s, m.meta["paths_exit"], 120, 0.0, EarlyExitConfig(), m.df["retorno"].to_numpy(),
                      m.meta["sigma"], 0.10)
     assert len(em.df) == 2000
+    # média dos 3 métodos: a saída roda em cada método (1/3 dos caminhos) e junta
+    mm = run_monte_carlo(s, px, 120, 0.0, n_paths=3000, cdi_annual=0.10)
+    ex = run_mc_exit_result(s, mm, 120, 0.0, EarlyExitConfig(), 0.10)
+    assert len(ex.df) == 3 * (2000 // 3) and 0 <= summarize_exit(ex)["p_saida"] <= 1
     x = run_ex_post_exit(s, px, px.index[100], 120, 0.0, EarlyExitConfig(), cf)
     assert len(x.dates) == 120 and np.isnan(x.ret[-1])  # último pregão = apuração (vale o payoff)
 

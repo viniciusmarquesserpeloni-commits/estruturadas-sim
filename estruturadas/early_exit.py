@@ -276,6 +276,21 @@ def run_mc_exit(structure: Structure, paths, n_days: int, cost: float, cfg: Earl
     return EarlyExitResult(df, N, cfg)
 
 
+def run_mc_exit_result(structure: Structure, mc, n_days: int, cost: float, cfg: EarlyExitConfig,
+                       cdi_annual: float, monitoring: str = "close", extra: float = 0.0) -> EarlyExitResult:
+    """Saída antecipada a partir do resultado do Monte Carlo; na média dos 3 métodos, roda em cada um (com
+    1/3 dos caminhos da saída) e junta — cada método com a sua marcação de vol."""
+    meta = mc.meta
+    if meta.get("method") == "media":
+        k = len(meta["parts"])
+        sub = EarlyExitConfig(**{**vars(cfg), "mc_paths": max(1, cfg.mc_paths // k)})
+        dfs = [run_mc_exit_result(structure, p, n_days, cost, sub, cdi_annual, monitoring, extra).df for p in meta["parts"]]
+        return EarlyExitResult(pd.concat(dfs, ignore_index=True), n_days, cfg)
+    return run_mc_exit(structure, meta["paths_exit"], n_days, cost, cfg, mc.df["retorno"].to_numpy(), meta["sigma"],
+                       cdi_annual, monitoring, extra, meta.get("paths_exit_high"), meta.get("paths_exit_low"),
+                       meta.get("paths_exit_var"), meta.get("garch"), meta.get("vol_scale_eff", meta.get("vol_scale", 1.0)))
+
+
 @dataclass
 class ExPostExit:
     dates: list  # datas dos pregões após a contratação (até o último disponível ou a apuração)

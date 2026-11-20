@@ -163,3 +163,35 @@ def test_alvo_de_variancia_prende_a_vol_de_longo_prazo():
     s2b = float(np.mean((bad - bad.mean()) ** 2))
     assert b.long_run_var == pytest.approx(s2b, rel=0.02)
     assert vol_panel(b, bad, 63)["no_limite"] == b.at_limit
+
+
+def test_vol_combinada_com_252_pregoes():
+    from estruturadas.garch import blend_scale, realized_var
+    lr = gjr_series()
+    px = prices_from(lr)
+    g = fit_garch(lr, "gjr")
+    k = blend_scale(g, lr, 63)
+    fg, fr = float(term_var(g, g.h_next, 63)), realized_var(lr)
+    assert (k * k * fg) == pytest.approx(math.sqrt(fg * fr), rel=1e-12)  # variância = média geométrica
+    vp = vol_panel(g, lr, 63)
+    assert vp["vol_prazo"] == pytest.approx(math.sqrt(vp["vol_prazo_garch"] * vp["vol_252"]), rel=1e-12)
+    s = presets.collar_ki(1.0, 1.06, 1.12)
+    a = run_monte_carlo(s, px, 63, 0.0, "fhs_garch", 2000, cdi_annual=0.12, garch=g)
+    b = run_monte_carlo(s, px, 63, 0.0, "fhs_garch", 2000, cdi_annual=0.12, garch=g, vol_blend=False)
+    assert a.meta["sigma"] == pytest.approx(vp["vol_prazo"]) and b.meta["sigma"] == pytest.approx(vp["vol_prazo_garch"])
+    assert a.meta["vol_scale_eff"] == pytest.approx(k)
+
+
+def test_media_dos_tres_metodos():
+    lr = gjr_series(n=1500)
+    px = prices_from(lr)
+    s = presets.collar_ki(1.0, 1.06, 1.12)
+    r = run_monte_carlo(s, px, 63, 0.0, n_paths=3000, cdi_annual=0.12, seed=2)
+    assert r.meta["method"] == "media" and len(r.df) == 3000 and r.meta["garch"] is not None
+    parts = r.meta["parts_summary"]
+    assert [p["method"] for p in parts] == ["fhs_garch", "bootstrap", "gbm"]
+    assert summarize(r)["p_lucro"] == pytest.approx(np.mean([p["p_lucro"] for p in parts]), abs=1e-9)
+    assert r.meta["paths_sample"].shape[1] == 63
+    cal = walk_forward(s, px, 21, 0.0, "media", step=60, n_paths=300, cdi_annual=0.1)
+    br = cal.brier()
+    assert "t" in br and br["t"].notna().all()

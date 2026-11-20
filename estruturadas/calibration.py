@@ -7,7 +7,9 @@ dados novos) e compara com o que aconteceu de fato na janela [t, t+N] (caminho r
 
 Régua: o "chute fixo" (climatologia) = frequência do evento nas janelas já encerradas até t. Brier =
 média de (probabilidade − resultado 0/1)²; se o modelo não tiver Brier menor que o chute fixo, a
-probabilidade deve ser lida como ordem de grandeza, não como previsão. Diagrama de confiabilidade:
+probabilidade deve ser lida como ordem de grandeza, não como previsão. Significância: estatística t de
+Diebold-Mariano da diferença de perdas, com erro padrão robusto à sobreposição das janelas (HAC de
+Bartlett, defasagens ≈ N/passo + 2); |t| ≥ 2 ≈ diferença significativa a 5%. Diagrama de confiabilidade:
 previsões agrupadas em faixas de 10 p.p. × frequência realizada em cada faixa.
 """
 from __future__ import annotations
@@ -23,6 +25,20 @@ from .garch import filtered, fit_garch
 from .legs import Structure
 
 TOL = 1e-9
+T_SIGNIF = 2.0  # |t| a partir do qual a diferença de Brier é tratada como significativa
+
+
+def hac_t(x, lags: int) -> float:
+    """Estatística t da média de ``x`` com variância de longo prazo de Newey-West (pesos de Bartlett)."""
+    x = np.asarray(x, dtype=float)
+    n = len(x)
+    if n < 3:
+        return float("nan")
+    d = x - x.mean()
+    v = float(d @ d) / n
+    for k in range(1, min(lags, n - 1) + 1):
+        v += 2.0 * (1.0 - k / (lags + 1.0)) * float(d[k:] @ d[:-k]) / n
+    return float(x.mean() / np.sqrt(v / n)) if v > 0 else float("nan")
 CALIB_EVENTS = [("lucro", "P(lucro > 0)"), ("cdi", "P(retorno > CDI)"), ("barreira", "P(barreira acionada)")]
 
 
@@ -39,8 +55,10 @@ class CalibrationResult:
         return [(k, label) for k, label in CALIB_EVENTS if f"prev_{k}" in self.df]
 
     def brier(self) -> pd.DataFrame:
-        """Brier do modelo × do chute fixo, ganho relativo (1 − modelo/chute) e médias previstas × realizadas."""
+        """Brier do modelo × do chute fixo, ganho relativo (1 − modelo/chute), estatística t da diferença
+        (positiva = modelo melhor) e médias previstas × realizadas."""
         rows = []
+        lags = int(np.ceil(self.n_days / self.step)) + 2
         for k, label in self.events():
             y = self.df[f"real_{k}"].to_numpy(dtype=float)
             p = self.df[f"prev_{k}"].to_numpy(dtype=float)
@@ -48,6 +66,7 @@ class CalibrationResult:
             bm, bc = float(np.mean((p - y) ** 2)), float(np.mean((c - y) ** 2))
             rows.append({"indicador": label, "chave": k, "brier_modelo": bm, "brier_chute": bc,
                          "ganho": 1.0 - bm / bc if bc > 0 else float("nan"),
+                         "t": hac_t((c - y) ** 2 - (p - y) ** 2, lags),
                          "prev_media": float(p.mean()), "chute_medio": float(c.mean()), "real": float(y.mean()),
                          "n": len(y)})
         return pd.DataFrame(rows)
@@ -66,7 +85,7 @@ class CalibrationResult:
         return pd.DataFrame(rows)
 
 
-def walk_forward(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float, method: str = "fhs_garch",
+def walk_forward(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float, method: str = "media",
                  step: int = 10, start: int = 504, n_paths: int = 1000, cdi_factor=None, cdi_annual: float = 0.10,
                  monitoring: str = "close", extra_cost: float = 0.0, block: int = 20, seed: int = 42,
                  drift: str = "cdi", premium: float = 0.05, vol_model: str = "gjr", refit: int = 252,
@@ -100,7 +119,7 @@ def walk_forward(structure: Structure, prices: pd.DataFrame, n_days: int, cost: 
         sub = prices.iloc[: t + 1]
         rate = cdi_annual if F is None else float((F[t] / F[t - 1]) ** TRADING_DAYS - 1)
         garch = None
-        if method == "fhs_garch":
+        if method in ("fhs_garch", "media"):
             lr, up, dn = lr_all[:t], up_all[:t], dn_all[:t]
             if fit is None or t - fit_t >= refit:
                 fit, fit_t = fit_garch(lr, vol_model, up, dn), t

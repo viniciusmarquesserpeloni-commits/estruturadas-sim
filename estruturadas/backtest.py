@@ -3,20 +3,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import math
+
 import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
 from .data import TRADING_DAYS, previous_business_day
-from .garch import GarchFit, fhs_drift_daily, fhs_paths, fit_garch, term_vol
+from .garch import GarchFit, blend_scale, fhs_drift_daily, fhs_paths, fit_garch, term_vol
 from .legs import (Evaluation, Structure, event_label, evaluate_paths, first_hit_index,
                    payoff_profile_summary, returns_from_payoff)
 from .pricing import BGK_BETA, gbm_paths
 
 DRIFT_LABELS = {"cdi": "CDI", "cdi_premio": "CDI + prêmio", "zero": "Zero", "historico": "Histórico (média do período)",
                 "personalizado": "Personalizado"}
-MC_METHOD_LABELS = {"fhs_garch": "FHS-GARCH (vol condicional)", "bootstrap": "Bootstrap em blocos",
-                    "gbm": "GBM (log-normal)"}
+MC_METHOD_LABELS = {"media": "Média dos 3 métodos (recomendado)", "fhs_garch": "FHS-GARCH (vol condicional)",
+                    "bootstrap": "Bootstrap em blocos", "gbm": "GBM (log-normal)"}
+ENSEMBLE = ("fhs_garch", "bootstrap", "gbm")  # métodos combinados em "media"
 EXIT_PATHS = 2000  # caminhos guardados para a simulação da saída antecipada
 
 
@@ -222,31 +225,42 @@ def gbm_drift_daily(lr: np.ndarray, sigma: float, drift: str, cdi_annual: float,
 
 
 def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float,
-                    method: str = "fhs_garch", n_paths: int = 10_000, block: int = 20,
+                    method: str = "media", n_paths: int = 10_000, block: int = 20,
                     drift: str = "cdi", cdi_annual: float = 0.10, seed: int = 42,
                     monitoring: str = "close", extra_cost: float = 0.0,
                     vol_window: int | None = None, premium: float = 0.05, custom: float | None = None,
-                    vol_scale: float = 1.0, vol_model: str = "gjr", garch: GarchFit | None = None) -> BacktestResult:
+                    vol_scale: float = 1.0, vol_model: str = "gjr", garch: GarchFit | None = None,
+                    vol_blend: bool = True) -> BacktestResult:
     """Simula caminhos a partir do histórico e aplica a estrutura.
 
-    FHS-GARCH (padrão): parte da vol de hoje estimada pelo GARCH/GJR e sorteia choques padronizados
-    reais (com a máxima e a mínima do dia); a vol de cada caminho evolui com os próprios choques.
+    Média dos 3 métodos (padrão): FHS-GARCH, bootstrap e GBM com ``n_paths``/3 caminhos cada, juntos — as
+    probabilidades são a média das três. Nos testes fora da amostra, foi a única previsão com ganho
+    significativo sobre a frequência histórica tanto na barreira do Collar KI quanto num evento só de vol.
+    FHS-GARCH: parte da vol de hoje estimada pelo GARCH/GJR e sorteia choques padronizados reais (com a
+    máxima e a mínima do dia); a vol de cada caminho evolui com os próprios choques. Com ``vol_blend``, a
+    vol do prazo é combinada com a realizada de 252 pregões (``garch.blend_scale``).
     ``garch`` reaproveita um ajuste já feito (grade de cenários, calibração).
     Bootstrap: sorteia blocos de dias reais (fechamento, máxima e mínima juntos), com a média trocada
     pelo drift escolhido e os desvios escalados por ``vol_scale``; com monitoramento intradiário usa a
     máxima/mínima sorteadas. GBM: só fechamentos; intradiário pela correção de Broadie-Glasserman-Kou."""
+    if method == "media":
+        return _run_ensemble(structure, prices, n_days, cost, n_paths, block, drift, cdi_annual, seed, monitoring,
+                             extra_cost, vol_window, premium, custom, vol_scale, vol_model, garch, vol_blend)
     lr, up, dn = ohlc_log_returns(prices)
     mu = drift_annual(drift, cdi_annual, premium, custom)
     high = low = hv = None
+    scale_eff = vol_scale
     if method == "fhs_garch":
         if garch is None:
             garch = fit_garch(lr, vol_model, up, dn)
-        sigma_base = float(term_vol(garch, garch.h_next, n_days))
+        blend = blend_scale(garch, lr, n_days) if vol_blend else 1.0
+        scale_eff = vol_scale * blend
+        sigma_base = float(term_vol(garch, garch.h_next, n_days)) * blend
     else:
         sigma_base = float(np.std(lr[-vol_window:] if vol_window else lr, ddof=1) * np.sqrt(TRADING_DAYS))
     sigma = sigma_base * vol_scale
     if method == "fhs_garch":
-        close, high, low, hv = fhs_paths(garch, n_paths, n_days, seed, fhs_drift_daily(lr, mu, vol_scale), vol_scale,
+        close, high, low, hv = fhs_paths(garch, n_paths, n_days, seed, fhs_drift_daily(lr, mu, scale_eff), scale_eff,
                                          intraday=monitoring == "intraday")
         if monitoring != "intraday":
             high = low = None
@@ -266,7 +280,8 @@ def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cos
     df["retorno_cdi"] = (1 + cdi_annual) ** (n_days / TRADING_DAYS) - 1
     df["retorno_cdi_hoje"] = df["retorno_cdi"]
     k = min(EXIT_PATHS, len(close))
-    meta = {"method": method, "sigma": sigma, "sigma_base": sigma_base, "vol_scale": vol_scale, "drift": drift,
+    meta = {"method": method, "sigma": sigma, "sigma_base": sigma_base, "vol_scale": vol_scale,
+            "vol_scale_eff": scale_eff, "drift": drift,
             "mu": mu, "premium": premium, "block": block, "seed": seed, "monitoring": monitoring,
             "paths_sample": close[: min(200, len(close))], "paths_exit": close[:k],
             "paths_exit_high": None if high is None else high[:k], "paths_exit_low": None if low is None else low[:k],
@@ -276,18 +291,49 @@ def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cos
                           _return_max(structure, cost, extra_cost), "mc", meta)
 
 
-SCENARIO_VOLS = (0.8, 1.0, 1.2)
+def _probabilities(structure: Structure, df: pd.DataFrame) -> dict:
+    return {"p_lucro": float((df["retorno"] > 1e-9).mean()),
+            "p_cdi": float((df["retorno"] > df["retorno_cdi_hoje"] + 1e-9).mean()),
+            "p_barreira": float(df["barreira_qualquer"].mean()) if len(structure.events) else float("nan"),
+            "media": float(df["retorno"].mean())}
+
+
+def _run_ensemble(structure, prices, n_days, cost, n_paths, block, drift, cdi_annual, seed, monitoring, extra_cost,
+                  vol_window, premium, custom, vol_scale, vol_model, garch, vol_blend) -> BacktestResult:
+    """Média dos 3 métodos: cada um com n_paths/3 caminhos; os caminhos ficam juntos (média das probabilidades)."""
+    if garch is None:
+        lr, up, dn = ohlc_log_returns(prices)
+        garch = fit_garch(lr, vol_model, up, dn)
+    per = int(math.ceil(n_paths / len(ENSEMBLE)))
+    parts = [run_monte_carlo(structure, prices, n_days, cost, m, per, block, drift, cdi_annual, seed, monitoring,
+                             extra_cost, vol_window, premium, custom, vol_scale, vol_model,
+                             garch if m == "fhs_garch" else None, vol_blend) for m in ENSEMBLE]
+    df = pd.concat([p.df for p in parts], ignore_index=True)
+    first = parts[0].meta
+    samples = [p.meta["paths_sample"] for p in parts]
+    k = min(len(s) for s in samples)
+    sample = np.stack([s[i] for i in range(k) for s in samples])  # intercalados, para o gráfico misturar os três
+    meta = dict(first, method="media", parts=parts,
+                parts_summary=[dict(method=m, sigma=p.meta["sigma"], **_probabilities(structure, p.df))
+                               for m, p in zip(ENSEMBLE, parts)],
+                paths_sample=sample, paths_exit=None, paths_exit_high=None, paths_exit_low=None, paths_exit_var=None)
+    return BacktestResult(df, _event_columns(structure), n_days, len(df), _return_max(structure, cost, extra_cost),
+                          "mc", meta)
+
+
+# Escalas de vol da grade de cenários: ≈ percentis 10 e 90 da razão vol realizada ÷ vol prevista em 3 meses
+# (25 ações, 2011–2026). A grade anterior (0,8/1,0/1,2) cobria só 46% dos desfechos.
+SCENARIO_VOLS = (0.6, 1.0, 1.3)
 SCENARIO_DRIFTS = ("zero", "cdi", "cdi_premio")
 
 
-def run_scenarios(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float, method: str = "fhs_garch",
+def run_scenarios(structure: Structure, prices: pd.DataFrame, n_days: int, cost: float, method: str = "media",
                   block: int = 20, cdi_annual: float = 0.10, seed: int = 42, monitoring: str = "close",
                   extra_cost: float = 0.0, premium: float = 0.05, n_paths: int = 5000,
                   vol_scales=SCENARIO_VOLS, vol_model: str = "gjr", garch: GarchFit | None = None) -> pd.DataFrame:
     """Grade de premissas do Monte Carlo (incerteza de premissa, não de sorteio): drift ∈ {zero, CDI,
-    CDI + prêmio} × vol ∈ {0,8; 1,0; 1,2} × a vol de base (no FHS, a vol prevista pelo GARCH), com os
-    mesmos números aleatórios."""
-    if method == "fhs_garch" and garch is None:
+    CDI + prêmio} × vol ∈ {0,6; 1,0; 1,3} × a vol de base de cada método, com os mesmos números aleatórios."""
+    if method in ("fhs_garch", "media") and garch is None:
         lr, up, dn = ohlc_log_returns(prices)
         garch = fit_garch(lr, vol_model, up, dn)
     rows = []
@@ -295,12 +341,8 @@ def run_scenarios(structure: Structure, prices: pd.DataFrame, n_days: int, cost:
         for vs in vol_scales:
             r = run_monte_carlo(structure, prices, n_days, cost, method, n_paths, block, drift, cdi_annual, seed,
                                 monitoring, extra_cost, premium=premium, vol_scale=vs, vol_model=vol_model, garch=garch)
-            d = r.df
             rows.append({"drift": drift, "mu": r.meta["mu"], "vol_scale": vs, "sigma": r.meta["sigma"],
-                         "p_lucro": float((d["retorno"] > 1e-9).mean()),
-                         "p_cdi": float((d["retorno"] > d["retorno_cdi_hoje"] + 1e-9).mean()),
-                         "p_barreira": float(d["barreira_qualquer"].mean()) if len(structure.events) else float("nan"),
-                         "media": float(d["retorno"].mean())})
+                         **_probabilities(structure, r.df)})
     return pd.DataFrame(rows)
 
 

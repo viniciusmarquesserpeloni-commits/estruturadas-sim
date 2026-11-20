@@ -304,15 +304,41 @@ def term_vol(fit: GarchFit, h1, m):
     return np.sqrt(term_var(fit, h1, m) * TRADING_DAYS)
 
 
+BLEND_WINDOW = 252  # pregões da vol realizada combinada com a previsão do GARCH
+
+
+def realized_var(lr, window: int = BLEND_WINDOW) -> float:
+    """Variância diária realizada dos últimos ``window`` pregões (média dos retornos², soma sequencial)."""
+    tail = np.asarray(lr, dtype=float)[-window:]
+    return _seqsum(tail * tail) / len(tail)
+
+
+def blend_scale(fit: GarchFit, lr, n_days: int) -> float:
+    """Fator que leva a vol do prazo do GARCH à média geométrica com a vol realizada de 252 pregões:
+    variância usada = √(variância prevista pelo GARCH × variância realizada de 252 pregões).
+
+    Nos testes fora da amostra (docs/ANALISE_CRITICA_2026-11.md), o GARCH sozinho superestimou a variância
+    do prazo em 15%–25% (67% logo depois de choques extremos); a combinação ficou sem viés e reduziu a perda
+    média em ~30%, sem piorar a calibração das probabilidades."""
+    fg = float(term_var(fit, fit.h_next, n_days))
+    fr = realized_var(lr)
+    if not (fg > 0 and fr > 0):
+        return 1.0
+    return math.sqrt(math.sqrt(fg * fr) / fg)
+
+
 def vol_panel(fit: GarchFit, lr, n_days: int, window: int = 63) -> dict:
     """Resumo para o painel de volatilidade (tudo anualizado, base 252)."""
     lr = np.asarray(lr, dtype=float)
     tail = lr[-window:]
+    garch_prazo = float(term_vol(fit, fit.h_next, n_days))
     return {
         "modelo": VOL_MODEL_LABELS[fit.model],
         "vol_hoje": math.sqrt(fit.h_next * TRADING_DAYS),
         "vol_longo_prazo": math.sqrt(fit.long_run_var * TRADING_DAYS),
-        "vol_prazo": float(term_vol(fit, fit.h_next, n_days)),
+        "vol_prazo": garch_prazo * blend_scale(fit, lr, n_days),  # a usada no Monte Carlo e no modo Teórico
+        "vol_prazo_garch": garch_prazo,
+        "vol_252": math.sqrt(realized_var(lr) * TRADING_DAYS),
         "vol_realizada": float(np.std(tail, ddof=1) * math.sqrt(TRADING_DAYS)) if len(tail) > 1 else float("nan"),
         "meia_vida": fit.half_life,
         "persistencia": fit.persistence,
