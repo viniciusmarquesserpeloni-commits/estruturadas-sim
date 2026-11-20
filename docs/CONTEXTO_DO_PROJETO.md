@@ -101,7 +101,7 @@
   - `e5e97a6` estrutura inicial · `bae8245` motor de payoff + presets · `27faaee` precificação ·
     `7980c97` dados/backtest/métricas · `8c18b52` fix pandas 3 · `c12226f` app Streamlit · `217b8b7` README ·
     `5c49e4a` motor JS · `218b596` site estático + workflow.
-- **Testes:** 84 pytest + 21 node, todos passando.
+- **Testes:** 89 pytest + 22 node, todos passando.
 - **Deploy:** GitHub Pages ativo com *Source: GitHub Actions*; primeiro deploy (run 39344983819) passou em todas
   as etapas; site conferido no ar (BBDC4/Proteção Total: 3.924 janelas, P(lucro) 100%, P>CDI 35,07%, barreira
   acionada 27,55%, ex-post +23,42% até 19/10/2026).
@@ -156,8 +156,12 @@
   geométrica das variâncias; desligável com `vol_blend=False`/`volBlend:false`); **vol única** (modo Teórico usa a
   mesma vol prevista para o prazo, task `volp` no worker / `cached_vol_prazo` no Streamlit); **grade 0,6/1,0/1,3**;
   **coluna t (Diebold-Mariano HAC)** no painel de calibração. Estado salvo: STATE_VERSION 4 (padrão FHS → média;
-  escolhas explícitas mantidas). Pendente: prioridade 3 do relatório (correção da média dos caminhos FHS, indicador
-  "retorno médio − CDI", comparação lado a lado de estruturas, calibrar a saída com marcações reais, regenerar o guia).
+  escolhas explícitas mantidas).
+- **Prioridade 3 (20/11/2026, aval "Sim, prioridade 3"; README seção 4.23):** correção martingal da média dos
+  caminhos (FHS e bootstrap), indicador `excesso_cdi` (retorno médio − CDI de hoje), aba **Comparar** (site e
+  Streamlit, até 4 estruturas, `estruturadas/compare.py` + `views/compare.js`) e guia em PDF regenerado com números
+  automáticos (`docs/guia/numeros.json` → `{{N:chave}}` no template). Pendente: calibrar a saída antecipada com
+  marcações reais da mesa (precisa de extratos do usuário).
 - **Bug antigo corrigido (desde `218b596`):** todas as páginas do site usam o mesmo `#view`; uma página já visitada
   continuava "viva" e se redesenhava por cima da atual a cada recálculo (e trocar a estrutura fora da aba Estrutura
   dava erro). Agora o roteador guarda `App.route` e cada página só se atualiza se for a rota atual.

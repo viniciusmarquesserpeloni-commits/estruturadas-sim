@@ -31,7 +31,7 @@ inicial, tipo de barreira *Knock Up/Down and In/Out* e proporção), e os result
      4.16 Solver de custo zero · 4.17 Textos em linguagem simples · 4.18 Saída antecipada ·
      4.19 Incerteza: intervalos de confiança e cenários · 4.20 Volatilidade condicional (FHS-GARCH) e calibração ·
      4.21 Correções de novembro de 2026 (dados, alvo de variância, IC de Wilson) · 4.22 Média dos métodos, vol combinada e
-     significância
+     significância · 4.23 Correção martingal, retorno médio − CDI e comparação de estruturas
 5. [Presets e fórmulas do payoff](#5-presets-e-fórmulas-do-payoff)
 6. [Módulos: Python, JavaScript e demais linguagens](#6-módulos-python-javascript-e-demais-linguagens)
 7. [Bibliotecas e serviços externos](#7-bibliotecas-e-serviços-externos)
@@ -732,6 +732,33 @@ perdas `(chute − y)² − (modelo − y)²`, com variância de longo prazo de 
 `⌈N/passo⌉ + 2`). O veredito passou a ser "melhor/pior com significância estatística" (|t| ≥ 2) ou "não
 distinguível de ruído" — antes, qualquer ganho acima de 2% era apresentado como "o modelo foi melhor".
 
+### 4.23 Prioridade 3 (novembro de 2026): correção martingal, retorno médio − CDI e comparação de estruturas
+
+**Correção martingal dos caminhos** (Duan e Simonato, 1998; `martingale_factors` / `E.martingaleFactors`). No FHS
+e no bootstrap, quando há retorno esperado definido (CDI, CDI + prêmio, zero ou personalizado), cada dia j dos
+caminhos é multiplicado por `(1 + μ)^(j/252) / média dos caminhos(S_j)`: a média simulada cresce exatamente ao
+retorno esperado, sem o viés de sorteio nem o da vol variável do GARCH. No JS, a correção usa duas passadas com a
+mesma seed (a primeira só calcula as médias). Desligável com `martingale=False` / `martingale:false`.
+
+**Indicador "Retorno médio − CDI de hoje (no prazo)"** (`excesso_cdi`): na tabela de métricas e na dica do retorno
+mediano (em p.p.). No Monte Carlo com retorno esperado = CDI, mede o custo embutido da estrutura.
+
+**Comparação lado a lado** (aba **Comparar** no site e no Streamlit; `estruturadas/compare.py`,
+`site/assets/js/views/compare.js`, `C.payoffCompare` / `charts.payoff_compare_chart`). Até 4 estruturas, cada uma
+com o seu custo, na mesma ação, prazo e premissas: custo, retorno máximo e pior no vencimento; histórico (P(lucro),
+P(> CDI de hoje), P(barreira) com IC 95%, mediana, retorno médio − CDI, CVaR 5%); Monte Carlo (6.000 caminhos por
+estrutura). O melhor valor de cada linha fica em negrito (★ no Streamlit), menos P(barreira), e empates não são
+marcados. Entrada pelo botão **Adicionar à comparação** da aba Estrutura ou por preset + custo na própria aba. No
+site, a lista fica salva no navegador (`state.compare`); o fator do CDI passou a ser calculado antes da validação da
+estrutura atual, para a comparação funcionar mesmo com a estrutura em edição.
+
+**Guia em PDF regenerado** (`scripts/guia/`): `capturar_telas.py` grava em `docs/guia/numeros.json` os números dos
+exemplos calculados pelo próprio motor do site no momento da captura, e `montar_guia.py` troca os marcadores
+`{{N:chave}}` do template por esses valores — o texto não tem mais números escritos à mão.
+
+**Pendente (item 11 da análise):** calibrar a marcação da saída antecipada com marcações reais da mesa — depende
+de extratos que o simulador não tem.
+
 ## 5. Presets e fórmulas do payoff
 
 Valores em % do valor inicial (S0 = 1). Nos exemplos com ação, custo das opções = 0.
@@ -819,8 +846,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 
 | Arquivo | Linguagem | Função |
 |---|---|---|
-| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py), [`test_garch.py`](tests/test_garch.py), [`test_data_quality.py`](tests/test_data_quality.py) | Python (pytest) | 84 testes do motor Python |
-| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 21 testes do motor JS, incluindo comparação com o Python |
+| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py), [`test_garch.py`](tests/test_garch.py), [`test_data_quality.py`](tests/test_data_quality.py), [`test_compare.py`](tests/test_compare.py) | Python (pytest) | 89 testes do motor Python |
+| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 22 testes do motor JS, incluindo comparação com o Python |
 | [`scripts/pesquisa/`](scripts/pesquisa/) | Python | Experimentos da revisão metodológica (walk-forward, regime de juros) — referência, não produção |
 | [`.github/workflows/pages.yml`](.github/workflows/pages.yml) | YAML | Testes + dados + deploy no GitHub Pages |
 | [`.streamlit/config.toml`](.streamlit/config.toml) | TOML | Tema e servidor do Streamlit |
@@ -850,8 +877,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 ## 8. Testes e validação cruzada Python × JS
 
 ```bash
-pytest                                   # 84 testes do motor Python
-node --test tests/js/engine.test.mjs     # 21 testes do motor JS
+pytest                                   # 89 testes do motor Python
+node --test tests/js/engine.test.mjs     # 22 testes do motor JS
 python scripts/make_js_fixtures.py       # regenera as referências após mudar o motor Python
 ```
 

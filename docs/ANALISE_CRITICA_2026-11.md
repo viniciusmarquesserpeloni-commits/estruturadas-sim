@@ -5,7 +5,8 @@
 > simular?* Todos os números abaixo saem de testes reproduzíveis em `scripts/pesquisa/exp4…exp9` (seção 7).
 > A análise em si não alterou o simulador. **Atualização de 20/11/2026:** as três correções de prioridade 1
 > (seção 6) foram implementadas depois, a pedido do autor — filtro de dados, GARCH com alvo de variância e IC de
-> Wilson; ver README, seção 4.21. Os números abaixo são os de antes das correções.
+> Wilson; ver README, seção 4.21. As de prioridade 2 e 3 vieram em seguida (README, seções 4.22 e 4.23). Os
+> números abaixo são os de antes das correções.
 
 ## 1. Resumo
 
@@ -260,10 +261,11 @@ desfechos de vol. Uma grade de **0,6× / 1,0× / 1,3×** (≈ percentis 10 e 90 
    dois lados +0,6% contra −0,5%). Ganho pequeno: fazer junto com o item 2, não antes.
 8. **Vol única** entre modo Teórico e Monte Carlo (ou explicação na tela).
 
-**Prioridade 3 — evolução:**
+**Prioridade 3 — evolução — itens 9, 10 e 12 implementados em 20/11/2026 (README, seção 4.23); o item 11
+depende de marcações reais da mesa:**
 
 9. Correção da média dos caminhos FHS; indicador "retorno médio − CDI".
-10. Comparação lado a lado de duas estruturas (o uso que o próprio simulador recomenda).
+10. Comparação lado a lado de estruturas (até 4) (o uso que o próprio simulador recomenda).
 11. Calibrar a saída antecipada com marcações reais da mesa.
 12. Regenerar o guia em PDF depois das mudanças (os números citados são de 28/10/2026).
 
