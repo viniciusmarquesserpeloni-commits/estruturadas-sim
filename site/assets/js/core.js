@@ -44,13 +44,14 @@
   const DEFAULT_ADV = {
     start: "2010-01-01", adjusted: true, monitoring: "close", extra: 0,
     vol: null, rate: null, q: 0, pricingPaths: 50000, pricingSeed: 42,
-    mcMethod: "fhs_garch", volModel: "gjr", mcDrift: "cdi", mcPremium: 0.05, mcCustom: null, mcPaths: 10000, mcBlock: 20, mcSeed: 42,
+    mcMethod: "media", volModel: "gjr", mcDrift: "cdi", mcPremium: 0.05, mcCustom: null, mcPaths: 10000, mcBlock: 20, mcSeed: 42,
     regimeAdjust: true,
     exitOn: true, exitTrigger: 1.5, exitSpread: 0.01, exitDelay: 1, exitMinDays: 0,
     exitVolMode: "garch", exitVolAdd: 0.03, exitCalibrate: true,
   };
-  // 2 = revisão metodológica (drift CDI, ajuste de regime, CDI efetivo, padrão de 3 meses); 3 = FHS-GARCH como padrão
-  const STATE_VERSION = 3;
+  // 2 = revisão metodológica (drift CDI, ajuste de regime, CDI efetivo, padrão de 3 meses); 3 = FHS-GARCH como padrão;
+  // 4 = média dos 3 métodos como padrão do Monte Carlo
+  const STATE_VERSION = 4;
   function defaults() {
     // padrão: estrutura típica de 3 meses (63 pregões); a lâmina Proteção Total BBDC4 segue como preset
     const s = E.PRESETS.collar_ki.build(1.0, 1.06, 1.12);
@@ -70,6 +71,13 @@
       saved.version = STATE_VERSION;
       saved.adv = Object.assign({}, saved.adv || {}, { mcMethod: "fhs_garch", volModel: "gjr" });
       if (!saved.adv.exitVolMode || saved.adv.exitVolMode === "rolling") saved.adv.exitVolMode = "garch";
+      saved.version = 3;
+    }
+    if (saved && saved.version === 3) {
+      // versão 3 -> 4: quem estava no padrão (FHS-GARCH) passa para a média dos 3 métodos; escolhas explícitas ficam
+      saved.version = STATE_VERSION;
+      saved.adv = Object.assign({}, saved.adv || {});
+      if (!saved.adv.mcMethod || saved.adv.mcMethod === "fhs_garch") saved.adv.mcMethod = "media";
     }
     if (!saved || saved.version !== STATE_VERSION) {
       // estado de versão anterior: adota os novos padrões (estrutura de 3 meses, drift CDI, ajuste de regime),
@@ -179,7 +187,8 @@
     hist: (a) => E.runHistorical(a.s, a.P, a.n, a.cost, a.monitoring, a.extra, a.cdiF, a.cdiRef, a.regimeAdjust),
     mc: (a) => E.runMonteCarlo(a.s, a.P, a.n, a.cost, a.o),
     hexit: (a) => E.runHistoricalExit(a.s, a.P, a.n, a.cost, a.cfg, a.cdiF, a.retHold, a.monitoring, a.extra, a.cdiRef, a.regimeAdjust),
-    mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra, a.high, a.low, a.varPaths, a.garch, a.volScale),
+    mcexit: (a) => E.runMcExitParts(a.s, a.parts, a.n, a.cost, a.cfg, a.cdiAnnual, a.monitoring, a.extra),
+    volp: (a) => E.termVolForecast(a.P, a.n, a.volModel),
     scen: (a) => E.runScenarios(a.s, a.P, a.n, a.cost, a.o),
     calib: (a, progress) => E.walkForward(a.s, a.P, a.n, a.cost, a.o, progress),
   };
@@ -248,7 +257,16 @@
     const term = App.termDays(st, ctx.P ? ctx.P.d : null);
     ctx.n = term.n; ctx.obs = term.obs; ctx.termError = term.error;
     ctx.histVol = ctx.P ? E.histVol(ctx.P.c) : NaN;
-    ctx.sigma = st.adv.vol ?? (isFinite(ctx.histVol) ? ctx.histVol : 0.3);
+    // vol única: a vol prevista para o prazo (GARCH combinado com 252 pregões) vale para o modo Teórico e para o FHS
+    ctx.volPrazo = null;
+    if (ctx.P && ctx.n) {
+      try { ctx.volPrazo = await memo("volp:" + JSON.stringify([ctx.ticker, st.adv.adjusted, st.adv.start, ctx.n, st.adv.volModel, ctx.P.c.length]), () => App.call("volp", { P: ctx.P, n: ctx.n, volModel: st.adv.volModel || "gjr" })); }
+      catch (e) { ctx.volPrazo = null; }
+      if (!live()) return;
+    }
+    ctx.sigmaAuto = ctx.volPrazo ? ctx.volPrazo.sigma : isFinite(ctx.histVol) ? ctx.histVol : 0.3;
+    ctx.sigmaSource = st.adv.vol != null ? "informada" : ctx.volPrazo ? "prevista para o prazo" : "histórica de 252 pregões";
+    ctx.sigma = st.adv.vol ?? ctx.sigmaAuto;
     const selic = App.data.index ? App.data.index.selic_meta : null;
     ctx.cdiNow = App.cdiAtual();
     ctx.rateAnnual = st.adv.rate ?? ctx.cdiNow ?? (selic != null ? selic - 0.001 : 0.10);
@@ -306,7 +324,11 @@
       try {
         if (ctx.hist) ctx.hexit = await memo("hexit:" + ek, () => App.call("hexit", { s, P: ctx.P, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, cdiF: ctx.cdiF, retHold: ctx.hist.ret, monitoring: st.adv.monitoring, extra, cdiRef: ctx.rateAnnual, regimeAdjust: ctx.regimeAdjust }));
         if (!live()) return;
-        if (ctx.mc) ctx.mcexit = await memo("mcexit:" + ek + JSON.stringify(o), () => App.call("mcexit", { s, paths: ctx.mc.sample, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, retHold: ctx.mc.ret, sigma: ctx.mc.sigma, cdiAnnual: ctx.rateAnnual, monitoring: st.adv.monitoring, extra, high: ctx.mc.sampleH, low: ctx.mc.sampleL, varPaths: ctx.mc.sampleV, garch: ctx.mc.garch, volScale: ctx.mc.volScale }));
+        if (ctx.mc) {
+          const part = (m) => ({ paths: m.sample, retHold: m.ret, sigma: m.sigma, high: m.sampleH, low: m.sampleL, varPaths: m.sampleV, garch: m.garch, volScale: m.volScaleEff ?? m.volScale });
+          const parts = (ctx.mc.parts || [ctx.mc]).map(part);
+          ctx.mcexit = await memo("mcexit:" + ek + JSON.stringify(o), () => App.call("mcexit", { s, parts, n: ctx.n, cost: ctx.cost, cfg: ctx.exitCfg, cdiAnnual: ctx.rateAnnual, monitoring: st.adv.monitoring, extra }));
+        }
       } catch (e) { ctx.exitError = e.message; }
       ctx.exitPending = false;
     }

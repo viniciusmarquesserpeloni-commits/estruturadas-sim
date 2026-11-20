@@ -10,13 +10,13 @@
 
   /* Painel de volatilidade (só no FHS-GARCH). */
   function volCard(ctx, res) {
-    if (res.method !== "fhs_garch" || !res.garch) return "";
+    if (!["fhs_garch", "media"].includes(res.method) || !res.garch) return "";
     const g = res.garch, vp = E.volPanel(g, E.ohlcLogReturns(ctx.P).lr, res.N), UI = App.ui;
     const params = `α ${F.num(g.alpha, 3)} · γ ${F.num(g.gamma, 3)} · β ${F.num(g.beta, 3)}`;
     return `<div class="section-title">Volatilidade de hoje — ${esc(vp.modelo)}</div>
       <div class="card kpi-strip">
         ${UI.kpi("Vol de hoje", F.pct(vp.vol_hoje, 1, false), "prevista para o próximo pregão")}
-        ${UI.kpi("Vol prevista para o prazo", F.pct(vp.vol_prazo, 1, false), `média dos próximos ${F.int(res.N)} pregões (usada no MC)`)}
+        ${UI.kpi("Vol prevista para o prazo", F.pct(vp.vol_prazo, 1, false), `próximos ${F.int(res.N)} pregões: GARCH ${F.pct(vp.vol_prazo_garch, 0, false)} combinado com 252 pregões (${F.pct(vp.vol_252, 0, false)})`)}
         ${UI.kpi("Vol de longo prazo", F.pct(vp.vol_longo_prazo, 1, false), "para onde a vol converge")}
         ${UI.kpi("Vol realizada", F.pct(vp.vol_realizada, 1, false), "últimos 63 pregões")}
         ${UI.kpi("Meia-vida", `${F.num(vp.meia_vida, 0)} pregões`, "para a distância até o longo prazo cair à metade")}
@@ -61,10 +61,13 @@
     const label = br.find((b) => b.chave === calibKey).indicador;
     const span = res.rows.length ? `${F.date(res.rows[0].data)} a ${F.date(res.rows[res.rows.length - 1].data)}` : "";
     const nEff = Math.max(1, Math.round((res.rows.length * res.step) / res.N));
-    const table = `<table class="compact"><thead><tr><th>Indicador</th><th title="Brier do modelo">Modelo</th><th title="Brier do chute fixo">Chute fixo</th><th>Ganho</th><th title="Probabilidade média prevista">Previsto</th><th title="Frequência realizada">Real</th></tr></thead><tbody>
-      ${br.map((b) => `<tr><td>${esc(b.indicador)}</td><td>${F.num(b.brier_modelo, 4)}</td><td>${F.num(b.brier_chute, 4)}</td><td>${App.signed(b.ganho, 1)}</td><td>${F.pct(b.prev_media, 1, false)}</td><td>${F.pct(b.real, 1, false)}</td></tr>`).join("")}
+    const table = `<table class="compact"><thead><tr><th>Indicador</th><th title="Brier do modelo">Modelo</th><th title="Brier do chute fixo">Chute fixo</th><th>Ganho</th><th title="Estatística t de Diebold-Mariano (HAC): |t| ≥ 2 ≈ significativo a 5%">t</th><th title="Probabilidade média prevista">Previsto</th><th title="Frequência realizada">Real</th></tr></thead><tbody>
+      ${br.map((b) => `<tr><td>${esc(b.indicador)}</td><td>${F.num(b.brier_modelo, 4)}</td><td>${F.num(b.brier_chute, 4)}</td><td>${App.signed(b.ganho, 1)}</td><td>${isFinite(b.t) ? F.num(b.t, 1) : "—"}</td><td>${F.pct(b.prev_media, 1, false)}</td><td>${F.pct(b.real, 1, false)}</td></tr>`).join("")}
       </tbody></table>`;
-    const verdict = br.map((b) => (b.ganho > 0.02 ? `${esc(b.indicador)}: o modelo foi melhor que o chute fixo` : b.ganho > 0 ? `${esc(b.indicador)}: praticamente empatado com o chute fixo` : `${esc(b.indicador)}: não superou o chute fixo`)).join(" · ");
+    const verdict = br.map((b) => (!isFinite(b.t) ? `${esc(b.indicador)}: sem variação suficiente para testar`
+      : b.t >= E.T_SIGNIF ? `${esc(b.indicador)}: o modelo foi melhor que o chute fixo, com significância estatística`
+      : b.t <= -E.T_SIGNIF ? `${esc(b.indicador)}: o modelo foi pior que o chute fixo, com significância estatística`
+      : `${esc(b.indicador)}: diferença não distinguível de ruído (${b.ganho > 0 ? "ganho" : "perda"} de ${F.pct(Math.abs(b.ganho), 1, false)})`)).join(" · ");
     return head + `<div class="card-h"><h3>Resultado do teste</h3><span class="sub">${F.int(res.rows.length)} datas de ${span} · ${esc(E.MC_METHOD_LABELS[res.method])}</span></div>
       <div class="card-b"><div class="grid g-2">
         <div><div class="small muted" style="margin-bottom:6px">Brier score (menor é melhor) e ganho sobre o chute fixo</div><div style="overflow-x:auto">${table}</div><p class="small" style="margin:10px 0 0">${verdict}.</p>
@@ -109,17 +112,19 @@
     if (ctx.mcError) { CH().disposeIn(root); root.innerHTML = head + `<div class="card empty"><h3>Não foi possível rodar o Monte Carlo</h3><p>${esc(ctx.mcError)}</p></div>`; return; }
     if (!ctx.mc) { CH().disposeIn(root); root.innerHTML = head + `<div class="card"><div class="loading">Simulando ${F.int(st.adv.mcPaths)} caminhos…</div></div>`; return; }
     const res = ctx.mc, sm = E.summarize(res);
-    const method = res.method === "fhs_garch" ? `FHS-${res.volModel === "gjr" ? "GJR" : "GARCH"}: vol de hoje do modelo e choques reais padronizados (vol média prevista ${F.pct(res.sigma, 1, false)} a.a.)`
+    const vl = res.volModel === "gjr" ? "GJR" : "GARCH";
+    const method = res.method === "media" ? `média de 3 métodos com ${F.int(Math.ceil(res.n / 3))} caminhos cada: FHS-${vl} (vol prevista ${F.pct(res.partsSummary[0].sigma, 1, false)}), bootstrap em blocos e GBM (vol do período ${F.pct(res.partsSummary[2].sigma, 1, false)})`
+      : res.method === "fhs_garch" ? `FHS-${vl}: vol de hoje do modelo e choques reais padronizados (vol prevista para o prazo ${F.pct(res.sigma, 1, false)} a.a.)`
       : res.method === "bootstrap" ? `bootstrap em blocos de ${res.block} dias (fechamento, máxima e mínima juntos)` : `GBM com σ de ${F.pct(res.sigma, 1, false)} a.a.`;
     const desc = method + ` · retorno esperado da ação: ${E.DRIFT_LABELS[res.drift].toLowerCase()}${res.mu != null ? ` (${F.pct(res.mu, 2, false)} a.a.)` : ""}`;
     const intra = res.monitoring === "intraday" ? (res.method === "gbm" ? " · barreira com correção de Broadie-Glasserman-Kou (intradiário)" : " · barreira pela máxima/mínima sorteadas (intradiário)") : "";
     const cdi = Math.pow(1 + ctx.rateAnnual, res.N / 252) - 1;
-    const assume = res.method === "fhs_garch" ? "o FHS reamostra os choques do passado, mas parte da vol de hoje e a deixa evoluir" : res.method === "bootstrap" ? "o bootstrap reamostra o passado com a vol média do período" : "o GBM supõe retornos normais com vol constante";
+    const assume = res.method === "media" ? "cada um dos três métodos tem um ponto fraco (o FHS exagera a vol depois de choques, o bootstrap usa a vol média do passado, o GBM supõe retornos normais), e a média dilui os erros" : res.method === "fhs_garch" ? "o FHS reamostra os choques do passado, mas parte da vol de hoje e a deixa evoluir" : res.method === "bootstrap" ? "o bootstrap reamostra o passado com a vol média do período" : "o GBM supõe retornos normais com vol constante";
     CH().disposeIn(root);
     root.innerHTML = head + `
       <p class="small muted" style="margin:-8px 0 12px"><b>${F.int(sm.n)} caminhos</b> de ${F.int(res.N)} pregões · ${desc} · seed ${res.seed}${intra}</p>
-      <div class="card"><div class="kpi-strip">${UI.kpis(sm, st.invested, "caminhos", ctx.scen)}</div>
-        <div class="card-note">O erro de sorteio é desprezível; a incerteza que importa é de premissa. As faixas mostram o mínimo e o máximo entre 9 cenários de retorno esperado × volatilidade (tabela abaixo).</div></div>
+      <div class="card"><div class="kpi-strip">${UI.kpis(sm, st.invested, "caminhos", ctx.scen, res.partsSummary)}</div>
+        <div class="card-note">O erro de sorteio é desprezível; a incerteza que importa é de modelo e de premissa. ${res.partsSummary ? `Cada probabilidade é a média de três métodos (FHS-GARCH, bootstrap e GBM) — nos testes fora da amostra, a combinação acertou mais que qualquer método sozinho; "métodos" mostra o menor e o maior entre eles. ` : ""}"Cenários" mostra o mínimo e o máximo entre 9 combinações de retorno esperado × volatilidade (tabela abaixo).</div></div>
       ${volCard(ctx, res)}
       ${UI.scenarioCard(ctx, res)}
       <div class="grid g-2" style="margin-top:16px">

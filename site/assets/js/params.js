@@ -70,15 +70,15 @@
         <label class="fl">Custos adicionais (% do investido) <input class="input num" id="a-extra" value="${pctIn(adv.extra)}" inputmode="decimal"></label>
       </div>
       <div class="f-group"><span class="f-label">Precificação (modo Teórico)</span>
-        <label class="fl">Volatilidade (% a.a.) <input class="input num" id="a-vol" value="${pctIn(adv.vol)}" placeholder="${isFinite(ctx.histVol) ? F.num(ctx.histVol * 100, 2) + " (hist.)" : "automática"}" inputmode="decimal"></label>
+        <label class="fl">Volatilidade (% a.a.) <input class="input num" id="a-vol" value="${pctIn(adv.vol)}" placeholder="${isFinite(ctx.sigmaAuto) ? F.num(ctx.sigmaAuto * 100, 2) + (ctx.volPrazo ? " (prevista)" : " (hist.)") : "automática"}" inputmode="decimal"></label>
         <label class="fl">CDI de referência (% a.a.) <input class="input num" id="a-rate" value="${pctIn(adv.rate)}" placeholder="${App.cdiAtual() != null ? F.num(App.cdiAtual() * 100, 2) + " (atual)" : "10,00"}" inputmode="decimal" title="Use o DI futuro do vencimento, se souber"></label>
         <label class="fl">Dividend yield (% a.a.) <input class="input num" id="a-q" value="${pctIn(adv.q)}" inputmode="decimal"></label>
         <label class="fl">Caminhos do MC (barreiras) ${sel("a-pp", [[20000, "20.000"], [50000, "50.000"], [100000, "100.000"], [200000, "200.000"]], adv.pricingPaths)}</label>
-        <div class="hint">Em branco = automático: vol histórica de 252 pregões e Selic meta (BCB).</div>
+        <div class="hint">Em branco = automático: vol prevista para o prazo (GARCH combinado com a vol de 252 pregões; a mesma do Monte Carlo) e CDI de hoje. Se souber a vol implícita da mesa, informe aqui.</div>
       </div>
       <div class="f-group"><span class="f-label">Monte Carlo (backtest)</span>
         <label class="fl">Método ${sel("a-mcm", Object.entries(E.MC_METHOD_LABELS), adv.mcMethod)}</label>
-        ${adv.mcMethod === "fhs_garch" ? `<label class="fl">Modelo de vol ${sel("a-vm", Object.entries(E.VOL_MODEL_LABELS), adv.volModel || "gjr")}</label>
+        ${["fhs_garch", "media"].includes(adv.mcMethod) ? `<label class="fl">Modelo de vol ${sel("a-vm", Object.entries(E.VOL_MODEL_LABELS), adv.volModel || "gjr")}</label>
         <div class="hint">Parte da vol de hoje e sorteia choques reais padronizados; a vol de cada caminho reage aos próprios choques e volta à média de longo prazo.</div>` : ""}
         <label class="fl">Retorno esperado da ação ${sel("a-drift", Object.entries(E.DRIFT_LABELS), adv.mcDrift)}</label>
         ${adv.mcDrift === "cdi_premio" ? `<label class="fl">Prêmio sobre o CDI (p.p. a.a.) <input class="input num" id="a-prem" value="${pctIn(adv.mcPremium)}" inputmode="decimal"></label>` : ""}
@@ -226,7 +226,7 @@
     if (dq) parts.push(`<span style="color:var(--warn)">${dq}</span>`);
     if (ctx.n) parts.push(`<span>Prazo: <b>${App.termText(ctx)}</b></span>`);
     if (ctx.termError) parts.push(`<span class="neg">${esc(ctx.termError)}</span>`);
-    if (isFinite(ctx.sigma)) parts.push(`<span>Vol. ${F.pct(ctx.sigma, 1, false)} a.a. · taxa ${F.pct(ctx.rateAnnual, 2, false)} a.a.</span>`);
+    if (isFinite(ctx.sigma)) parts.push(`<span title="Vol ${ctx.sigmaSource || ""}: usada no custo teórico e no Monte Carlo FHS">Vol. ${ctx.sigmaSource === "prevista para o prazo" ? "prevista p/ o prazo " : ""}${F.pct(ctx.sigma, 1, false)} a.a. · taxa ${F.pct(ctx.rateAnnual, 2, false)} a.a.</span>`);
     if (ctx.loading) parts.push(`<span class="muted">Calculando…</span>`);
     el.innerHTML = parts.join("");
   }

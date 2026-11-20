@@ -14,9 +14,15 @@
     const v = scen.map((r) => r[k]).filter((x) => isFinite(x));
     return v.length ? `cenários: ${F.num(Math.min(...v) * 100, 0)}–${F.num(Math.max(...v) * 100, 0)}%` : null;
   };
+  /* Faixa entre os 3 métodos do Monte Carlo (média dos métodos). */
+  UI.methodRange = (parts, k) => {
+    if (!parts) return null;
+    const v = parts.map((r) => r[k]).filter((x) => isFinite(x));
+    return v.length ? `métodos: ${F.num(Math.min(...v) * 100, 0)}–${F.num(Math.max(...v) * 100, 0)}%` : null;
+  };
   /* Indicadores na ordem da revisão: P(lucro) → P(> CDI de hoje) → P(barreira), cada um com sua faixa. */
-  UI.kpis = function (sm, invested, what, scen) {
-    const band = (k, fallback) => UI.ciText(sm, k) || UI.scenRange(scen, k) || fallback;
+  UI.kpis = function (sm, invested, what, scen, parts) {
+    const band = (k, fallback) => UI.ciText(sm, k) || [UI.methodRange(parts, k), UI.scenRange(scen, k)].filter(Boolean).join(" · ") || fallback;
     const hasBar = isFinite(sm.p_barreira);
     return [
       UI.kpi("P(lucro > 0)", F.pct(sm.p_lucro, 1, false), band("p_lucro", `${what}: ${F.int(sm.n)}`)),
@@ -43,7 +49,7 @@
   };
   /* Grade de cenários do Monte Carlo: retorno esperado (linhas) × volatilidade (colunas). */
   UI.scenarioCard = function (ctx, res) {
-    const head = `<div class="card" style="margin-top:16px"><div class="card-h"><h3>Sensibilidade às premissas</h3><span class="sub">retorno esperado da ação × volatilidade · 5.000 caminhos por cenário</span></div>`;
+    const head = `<div class="card" style="margin-top:16px"><div class="card-h"><h3>Sensibilidade às premissas</h3><span class="sub">retorno esperado da ação × volatilidade (0,6×, 1,0× e 1,3× a prevista) · 5.000 caminhos por cenário</span></div>`;
     if (ctx.scenError) return head + `<div class="card-b"><div class="err-note">${esc(ctx.scenError)}</div></div></div>`;
     if (!ctx.scen) return head + `<div class="card-b"><div class="loading">Rodando 9 cenários…</div></div></div>`;
     const rows = ctx.scen, vols = E.SCENARIO_VOLS, prem = rows.find((r) => r.drift === "cdi_premio");
@@ -53,10 +59,10 @@
       ${E.SCENARIO_DRIFTS.map((d) => `<tr><td>${lbl[d]}</td>${vols.map((v) => { const r = rows.find((x) => x.drift === d && x.volScale === v); const c = d === "cdi" && v === 1; return `<td${c ? ' style="font-weight:700"' : ""}>${isFinite(r[k]) ? F.pct(r[k], 1, false) : "—"}</td>`; }).join("")}</tr>`).join("")}
       </tbody></table></div>`;
     const v63 = ctx.P ? E.histVol(ctx.P.c, 63) : NaN, base = rows.find((r) => r.volScale === 1).sigma / 1;
-    const baseTxt = res && res.method === "fhs_garch" ? `vol média prevista pelo GARCH para o prazo (${F.pct(base, 1, false)} a.a.; no FHS a escala multiplica a vol de cada dia, que continua reagindo aos choques)`
+    const baseTxt = res && ["fhs_garch", "media"].includes(res.method) ? `vol prevista para o prazo (${F.pct(base, 1, false)} a.a., GARCH combinado com 252 pregões; no FHS a escala multiplica a vol de cada dia, que continua reagindo aos choques${res.method === "media" ? "; bootstrap e GBM escalam a vol do período" : ""})`
       : `vol histórica do período carregado (${F.pct(base, 1, false)} a.a.)`;
     return head + `<div class="card-b"><div class="grid g-3">${table("p_lucro", "P(lucro > 0)")}${table("p_cdi", "P(retorno > CDI de hoje)")}${table("p_barreira", "P(barreira acionada)")}</div></div>
-      <div class="card-note">Em negrito, o cenário central (retorno esperado = CDI, vol de base). Vol de base = ${baseTxt}; a vol realizada dos últimos 63 pregões é ${F.pct(v63, 1, false)} a.a.${isFinite(v63) ? ` (${F.num(v63 / base, 2)}× a base)` : ""}. Mesmos números aleatórios em todos os cenários.</div></div>`;
+      <div class="card-note">Em negrito, o cenário central (retorno esperado = CDI, vol de base). Vol de base = ${baseTxt}; a vol realizada dos últimos 63 pregões é ${F.pct(v63, 1, false)} a.a.${isFinite(v63) ? ` (${F.num(v63 / base, 2)}× a base)` : ""}. As escalas 0,6× e 1,3× são, aproximadamente, os percentis 10 e 90 do erro histórico da previsão de vol em 3 meses: a vol realizada caiu entre elas em cerca de 80% das vezes. Mesmos números aleatórios em todos os cenários.</div></div>`;
   };
   UI.csv = function (res, invested) {
     const head = ["data_inicio", "data_fim", "acao_final", "retorno", "retorno_acao", "retorno_cdi", "barreira_acionada", "resultado_rs"];

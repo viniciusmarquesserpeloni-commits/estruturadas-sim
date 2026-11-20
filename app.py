@@ -17,9 +17,9 @@ from estruturadas import presets
 from estruturadas.backtest import (DRIFT_LABELS, MC_METHOD_LABELS, SCENARIO_DRIFTS, SCENARIO_VOLS, ohlc_log_returns,
                                    run_ex_post, run_historical, run_monte_carlo, run_scenarios)
 from estruturadas.calibration import walk_forward
-from estruturadas.garch import VOL_MODEL_LABELS, vol_panel
+from estruturadas.garch import VOL_MODEL_LABELS, blend_scale, fit_garch, term_vol, vol_panel
 from estruturadas.early_exit import (VOL_MODE_LABELS, EarlyExitConfig, run_ex_post_exit, run_historical_exit,
-                                     run_mc_exit)
+                                     run_mc_exit_result)
 from estruturadas.formatting import fmt_brl, fmt_level, fmt_num, fmt_pct
 from estruturadas.legs import (BARRIER_LABELS, KIND_LABELS, MONITORING_LABELS, Leg, Structure, has_errors,
                                payoff_profile_summary, validate)
@@ -127,11 +127,23 @@ def cached_hexit(struct_json: str, prices: pd.DataFrame, n_days: int, cost: floa
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
-def cached_mcexit(struct_json: str, paths: np.ndarray, n_days: int, cost: float, cfg: dict, ret_hold: np.ndarray,
-                  sigma: float, cdi_annual: float, monitoring: str, extra_cost: float, high, low, var_paths=None,
-                  _garch=None, vol_scale: float = 1.0):
-    return run_mc_exit(sio.loads(struct_json), paths, n_days, cost, EarlyExitConfig(**cfg), ret_hold, sigma, cdi_annual,
-                       monitoring, extra_cost, high, low, var_paths, _garch, vol_scale)
+def cached_mcexit(struct_json: str, n_days: int, cost: float, cfg: dict, cdi_annual: float, monitoring: str,
+                  extra_cost: float, mc_key: tuple, _mc=None):
+    """Saída antecipada no Monte Carlo (na média dos 3 métodos, por método). ``mc_key`` identifica o Monte Carlo."""
+    return run_mc_exit_result(sio.loads(struct_json), _mc, n_days, cost, EarlyExitConfig(**cfg), cdi_annual, monitoring,
+                              extra_cost)
+
+
+@st.cache_data(show_spinner=False, max_entries=32)
+def cached_vol_prazo(prices: pd.DataFrame, n_days: int, model: str = "gjr") -> tuple | None:
+    """Vol prevista para o prazo (GARCH combinado com 252 pregões): (combinada, GARCH, realizada 252) ou None."""
+    lr = ohlc_log_returns(prices)[0]
+    try:
+        g = fit_garch(lr, model)
+    except ValueError:
+        return None
+    garch = float(term_vol(g, g.h_next, n_days))
+    return garch * blend_scale(g, lr, n_days), garch
 
 
 # ---------------------------------------------------------------------------
@@ -330,11 +342,15 @@ extra_cost_pct = sb.number_input("Custos/taxas adicionais (% do valor investido)
 extra_cost = extra_cost_pct / 100
 
 hist_vol = data.historical_vol(prices["Close"]) if prices is not None else float("nan")
+vol_prazo = cached_vol_prazo(prices, n_days) if prices is not None else None
 selic = cached_selic()
 with sb.expander("Parâmetros de precificação", expanded=cost_mode == "Teórico"):
-    vol_default = round(100 * hist_vol, 2) if np.isfinite(hist_vol) else 30.0
+    vol_auto = vol_prazo[0] if vol_prazo else hist_vol
+    vol_default = round(100 * vol_auto, 2) if np.isfinite(vol_auto) else 30.0
     vol_pct = st.number_input("Volatilidade (% a.a.)", min_value=1.0, max_value=300.0, value=float(vol_default),
-                              step=0.5, help="Padrão: vol histórica anualizada dos últimos 252 pregões.")
+                              step=0.5, help="Padrão: vol prevista para o prazo (GARCH combinado com a vol de 252 "
+                                             "pregões) — a mesma do Monte Carlo. Se souber a vol implícita da mesa, "
+                                             "informe aqui.")
     cdi_now = data.latest_cdi_annual(cached_cdi(date.today() - timedelta(days=20), date.today()))
     rate_default = (round(100 * cdi_now, 2) if cdi_now is not None
                     else round(100 * selic - 0.10, 2) if selic is not None else 10.0)
@@ -359,12 +375,13 @@ monitoring = sb.radio("Monitoramento", list(MONITORING_LABELS), format_func=MONI
 
 sb.header("6. Monte Carlo (backtest)")
 mc_method = sb.radio("Método", list(MC_METHOD_LABELS), format_func=MC_METHOD_LABELS.get,
-                     help="FHS-GARCH (padrão): parte da vol de hoje e sorteia choques reais padronizados; a vol de "
-                          "cada caminho reage aos próprios choques e volta à média de longo prazo.")
+                     help="Média dos 3 métodos (padrão): FHS-GARCH, bootstrap e GBM com 1/3 dos caminhos cada; nos "
+                          "testes fora da amostra, a combinação acertou mais que qualquer método sozinho. FHS-GARCH: "
+                          "parte da vol de hoje e sorteia choques reais padronizados.")
 vol_model = (sb.selectbox("Modelo de vol", list(VOL_MODEL_LABELS), format_func=VOL_MODEL_LABELS.get,
                           help="GJR: quedas aumentam a vol mais do que altas (efeito alavancagem). Usado também na "
                                "marcação da saída antecipada.")
-             if mc_method == "fhs_garch" else "gjr")
+             if mc_method in ("fhs_garch", "media") else "gjr")
 mc_drift = sb.selectbox("Retorno esperado da ação", list(DRIFT_LABELS), format_func=DRIFT_LABELS.get,
                         help="Padrão: CDI (visão neutra). A média histórica é estatisticamente pouco confiável "
                              "(erro padrão ≈ σ/√anos).")
@@ -590,11 +607,11 @@ if ready:
                                              hist_res.df["retorno"].to_numpy(), monitoring, extra_cost, rate_annual,
                                              bool(hist_res.meta.get("regime_adjust")))
                 if mc_res is not None:
-                    mcexit_res = cached_mcexit(struct_json, mc_res.meta["paths_exit"], n_days, cost, exit_cfg,
-                                               mc_res.df["retorno"].to_numpy(), mc_res.meta["sigma"], rate_annual,
-                                               monitoring, extra_cost, mc_res.meta["paths_exit_high"],
-                                               mc_res.meta["paths_exit_low"], mc_res.meta.get("paths_exit_var"),
-                                               mc_res.meta.get("garch"), mc_res.meta.get("vol_scale", 1.0))
+                    mc_key = (struct_json, ticker, len(prices), str(prices.index[-1]), n_days, cost, mc_method,
+                              int(mc_paths), int(mc_block), mc_drift, rate_annual, int(mc_seed), monitoring, extra_cost,
+                              mc_premium, mc_custom, vol_model)
+                    mcexit_res = cached_mcexit(struct_json, n_days, cost, exit_cfg, rate_annual, monitoring, extra_cost,
+                                               mc_key, mc_res)
     except Exception as exc:  # noqa: BLE001
         run_err = str(exc)
 
@@ -612,32 +629,37 @@ def _not_ready(container) -> bool:
     return False
 
 
-def _band(s: dict, key: str, scen=None) -> str:
-    """Faixa de incerteza: IC 95% (histórico) ou mínimo–máximo entre os cenários (Monte Carlo)."""
+def _band(s: dict, key: str, scen=None, parts=None) -> str:
+    """Faixa de incerteza: IC 95% (histórico) ou, no Monte Carlo, mínimo–máximo entre os 3 métodos e entre os cenários."""
     ci = s.get("ci", {}).get(key)
     if ci:
         return f"IC 95%: {fmt_num(100 * ci[0], 0)}–{fmt_num(100 * ci[1], 0)}%"
+    out = []
+    if parts:
+        v = [p[key] for p in parts if np.isfinite(p.get(key, np.nan))]
+        if v:
+            out.append(f"métodos: {fmt_num(100 * min(v), 0)}–{fmt_num(100 * max(v), 0)}%")
     if scen is not None and key in scen and scen[key].notna().any():
-        return f"cenários: {fmt_num(100 * scen[key].min(), 0)}–{fmt_num(100 * scen[key].max(), 0)}%"
-    return ""
+        out.append(f"cenários: {fmt_num(100 * scen[key].min(), 0)}–{fmt_num(100 * scen[key].max(), 0)}%")
+    return " · ".join(out)
 
 
-def _kpis(container, s: dict, scen=None) -> None:
+def _kpis(container, s: dict, scen=None, parts=None) -> None:
     """Indicadores na ordem da revisão: P(lucro) → P(> CDI de hoje) → P(barreira), com faixas."""
     k = container.columns(6)
-    k[0].metric("P(lucro > 0)", fmt_pct(s["p_lucro"], 1), help=_band(s, "p_lucro", scen) or None)
-    k[1].metric("P(retorno > CDI de hoje)", fmt_pct(s["p_cdi"], 1), help=_band(s, "p_cdi", scen) or None)
+    k[0].metric("P(lucro > 0)", fmt_pct(s["p_lucro"], 1), help=_band(s, "p_lucro", scen, parts) or None)
+    k[1].metric("P(retorno > CDI de hoje)", fmt_pct(s["p_cdi"], 1), help=_band(s, "p_cdi", scen, parts) or None)
     k[2].metric("P(barreira acionada)", fmt_pct(s["p_barreira"], 1) if np.isfinite(s["p_barreira"]) else "—",
-                help=_band(s, "p_barreira", scen) or None)
-    k[3].metric("P(perda)", fmt_pct(s["p_perda"], 1), help=_band(s, "p_perda", scen) or None)
+                help=_band(s, "p_barreira", scen, parts) or None)
+    k[3].metric("P(perda)", fmt_pct(s["p_perda"], 1), help=_band(s, "p_perda", scen, parts) or None)
     k[4].metric("Retorno mediano", fmt_pct(s["mediana"]), help=f"Em R\\$: {md_brl(invested * s['mediana'])}")
     k[5].metric("CVaR 5%", fmt_pct(s["cvar5"]), help="Média dos 5% piores resultados")
-    bands = [f"{lbl} {_band(s, key, scen).split(': ', 1)[1]}" for key, lbl in
+    bands = [f"{lbl} ({_band(s, key, scen, parts)})" for key, lbl in
              (("p_lucro", "P(lucro)"), ("p_cdi", "P(> CDI de hoje)"), ("p_barreira", "P(barreira)"))
-             if _band(s, key, scen)]
+             if _band(s, key, scen, parts)]
     if bands:
-        container.caption(("IC 95% (Wilson, amostra efetiva de 1,5 × as janelas não sobrepostas): " if s.get("ci") else
-                           "Faixa entre os 9 cenários de premissa: ") + " · ".join(bands))
+        container.caption(("Faixas — IC 95% de Wilson (amostra efetiva de 1,5 × as janelas não sobrepostas): " if s.get("ci") else
+                           "Faixas — entre os 3 métodos e entre os 9 cenários de premissa: ") + " · ".join(bands))
 
 
 def _side_by_side() -> pd.DataFrame:
@@ -749,9 +771,13 @@ with tab_hist:
 with tab_mc:
     if not _not_ready(st) and mc_res is not None:
         ms = summarize(mc_res)
-        if mc_method == "fhs_garch":
+        if mc_method == "media":
+            ps = mc_res.meta["parts_summary"]
+            desc = (f"média de 3 métodos: FHS-{'GJR' if vol_model == 'gjr' else 'GARCH'} (vol prevista para o prazo "
+                    f"{fmt_pct(ps[0]['sigma'], 1)} a.a.), bootstrap em blocos e GBM (vol do período {fmt_pct(ps[2]['sigma'], 1)} a.a.)")
+        elif mc_method == "fhs_garch":
             desc = (f"FHS-{'GJR' if vol_model == 'gjr' else 'GARCH'}: vol de hoje do modelo e choques reais "
-                    f"padronizados (vol média prevista {fmt_pct(mc_res.meta['sigma'], 1)} a.a.)")
+                    f"padronizados (vol prevista para o prazo {fmt_pct(mc_res.meta['sigma'], 1)} a.a.)")
         elif mc_method == "bootstrap":
             desc = f"bootstrap em blocos de {mc_block} dias dos log-retornos diários"
         else:
@@ -760,7 +786,7 @@ with tab_mc:
         intra = ("" if monitoring != "intraday" else " · barreira com correção BGK (intradiário)" if mc_method == "gbm"
                  else " · barreira pela máxima/mínima sorteadas (intradiário)")
         st.markdown(f"**{fmt_num(ms['n'], 0)} caminhos** de {n_days} pregões · {desc} · seed {mc_seed}" + intra)
-        _kpis(st, ms, scen_res)
+        _kpis(st, ms, scen_res, mc_res.meta.get("parts_summary"))
         fit = mc_res.meta.get("garch")
         if fit is not None:
             vp = vol_panel(fit, ohlc_log_returns(prices)[0], n_days)
@@ -768,7 +794,8 @@ with tab_mc:
             v = st.columns(6)
             v[0].metric("Vol de hoje", fmt_pct(vp["vol_hoje"], 1), help="Prevista para o próximo pregão")
             v[1].metric("Vol prevista para o prazo", fmt_pct(vp["vol_prazo"], 1),
-                        help=f"Média esperada dos próximos {n_days} pregões (usada no Monte Carlo)")
+                        help=f"Próximos {n_days} pregões: GARCH {fmt_pct(vp['vol_prazo_garch'], 1)} combinado com a vol "
+                             f"de 252 pregões ({fmt_pct(vp['vol_252'], 1)}). Usada no Monte Carlo e no modo Teórico.")
             v[2].metric("Vol de longo prazo", fmt_pct(vp["vol_longo_prazo"], 1), help="Para onde a vol converge")
             v[3].metric("Vol realizada (63 pregões)", fmt_pct(vp["vol_realizada"], 1))
             v[4].metric("Meia-vida", f"{vp['meia_vida']:.0f} pregões",
@@ -796,9 +823,9 @@ with tab_mc:
                 col.markdown(f"**{title}**")
                 col.dataframe(tab.map(lambda v: fmt_pct(v, 1) if np.isfinite(v) else "—"), key=f"scen_{key}")
             st.caption("Cenário central: retorno esperado = CDI e vol de base ("
-                       + ("vol média prevista pelo GARCH para o prazo" if mc_method == "fhs_garch"
-                          else "histórica do período") + "). 5.000 caminhos por cenário, com os mesmos números "
-                       "aleatórios.")
+                       + ("vol prevista para o prazo, GARCH combinado com 252 pregões" if mc_method in ("fhs_garch", "media")
+                          else "histórica do período") + "). Escalas de vol 0,6×, 1,0× e 1,3× ≈ percentis 10 e 90 do erro histórico "
+                       "da previsão de vol em 3 meses. 5.000 caminhos por cenário, com os mesmos números aleatórios.")
         if ms["barreiras"]:
             st.caption("Barreira acionada em: " + " · ".join(
                 f"{lbl}: **{fmt_pct(v, 1)}** dos caminhos" for lbl, v in ms["barreiras"].items()))
@@ -828,7 +855,9 @@ with tab_mc:
             shown = pd.DataFrame({
                 "Indicador": br["indicador"], "Brier do modelo": br["brier_modelo"].map(lambda v: fmt_num(v, 4)),
                 "Brier do chute fixo": br["brier_chute"].map(lambda v: fmt_num(v, 4)),
-                "Ganho": br["ganho"].map(lambda v: fmt_pct(v, 1)), "Previsto (média)": br["prev_media"].map(lambda v: fmt_pct(v, 1)),
+                "Ganho": br["ganho"].map(lambda v: fmt_pct(v, 1)),
+                "t": br["t"].map(lambda v: fmt_num(v, 1) if np.isfinite(v) else "—"),
+                "Previsto (média)": br["prev_media"].map(lambda v: fmt_pct(v, 1)),
                 "Aconteceu": br["real"].map(lambda v: fmt_pct(v, 1))})
             c1, c2 = st.columns(2)
             c1.dataframe(shown, hide_index=True, key="calib_table")
@@ -837,9 +866,13 @@ with tab_mc:
             c2.plotly_chart(charts.reliability_chart(cal.reliability(ev), dict(zip(br["chave"], br["indicador"]))[ev]),
                             key="calib_rel")
             st.caption(f"{len(cal.df)} datas de {cal.df['data'].iloc[0]:%d/%m/%Y} a {cal.df['data'].iloc[-1]:%d/%m/%Y}; "
-                       "1.000 caminhos por data; GARCH reestimado a cada 252 pregões. Se o Brier do modelo não for "
-                       "menor que o do chute fixo, trate a probabilidade como ordem de grandeza, não como previsão. "
-                       "Janelas vizinhas se sobrepõem: diferenças pequenas de Brier são ruído.")
+                       "1.000 caminhos por data; GARCH reestimado a cada 252 pregões. t = estatística de "
+                       "Diebold-Mariano com erro padrão robusto à sobreposição das janelas: |t| ≥ 2 ≈ diferença "
+                       "significativa a 5%; abaixo disso, a diferença de Brier não se distingue de ruído. "
+                       "Resultado: " + " · ".join(
+                           f"{r.indicador} — " + ("melhor que o chute fixo" if r.t >= 2 else "pior que o chute fixo"
+                                                  if r.t <= -2 else "não distinguível do chute fixo")
+                           for r in br.itertuples()) + ".")
         _exit_section("mc")
         out = mc_res.df.copy()
         out["resultado_rs"] = invested * out["retorno"]

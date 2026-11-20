@@ -9,7 +9,8 @@ const TASKS = {
   hist: (a) => E.runHistorical(a.s, a.P, a.n, a.cost, a.monitoring, a.extra, a.cdiF, a.cdiRef, a.regimeAdjust),
   mc: (a) => E.runMonteCarlo(a.s, a.P, a.n, a.cost, a.o),
   hexit: (a) => E.runHistoricalExit(a.s, a.P, a.n, a.cost, a.cfg, a.cdiF, a.retHold, a.monitoring, a.extra, a.cdiRef, a.regimeAdjust),
-  mcexit: (a) => E.runMcExit(a.s, a.paths, a.n, a.cost, a.cfg, a.retHold, a.sigma, a.cdiAnnual, a.monitoring, a.extra, a.high, a.low, a.varPaths, a.garch, a.volScale),
+  mcexit: (a) => E.runMcExitParts(a.s, a.parts, a.n, a.cost, a.cfg, a.cdiAnnual, a.monitoring, a.extra),
+  volp: (a) => E.termVolForecast(a.P, a.n, a.volModel),
   scen: (a) => E.runScenarios(a.s, a.P, a.n, a.cost, a.o),
   calib: (a, progress) => E.walkForward(a.s, a.P, a.n, a.cost, a.o, progress),
 };
