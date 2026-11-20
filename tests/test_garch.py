@@ -195,3 +195,28 @@ def test_media_dos_tres_metodos():
     cal = walk_forward(s, px, 21, 0.0, "media", step=60, n_paths=300, cdi_annual=0.1)
     br = cal.brier()
     assert "t" in br and br["t"].notna().all()
+
+
+def test_correcao_martingal():
+    from estruturadas.backtest import martingale_factors
+    lr = gjr_series(n=1500)
+    px = prices_from(lr)
+    s = presets.collar_ki(1.0, 1.06, 1.12)
+    target = 1.12 ** (63 / 252)
+    for m in ("fhs_garch", "bootstrap"):
+        r = run_monte_carlo(s, px, 63, 0.0, m, 3000, drift="cdi", cdi_annual=0.12, seed=4)
+        assert summarize(r)["acao_media"] == pytest.approx(target - 1, abs=1e-12)  # média de todos os caminhos: exata
+        raw = run_monte_carlo(s, px, 63, 0.0, m, 3000, drift="cdi", cdi_annual=0.12, seed=4, martingale=False)
+        assert abs(summarize(raw)["acao_media"] - (target - 1)) > 1e-6
+    # sem retorno esperado definido (média histórica) não há correção
+    h = run_monte_carlo(s, px, 63, 0.0, "fhs_garch", 2000, drift="historico", seed=4)
+    h0 = run_monte_carlo(s, px, 63, 0.0, "fhs_garch", 2000, drift="historico", seed=4, martingale=False)
+    pd.testing.assert_frame_equal(h.df, h0.df)
+    np.testing.assert_allclose(martingale_factors(np.array([[1.0, 2.0], [3.0, 4.0]]), 0.0), [0.5, 1 / 3])
+
+
+def test_excesso_sobre_o_cdi():
+    lr = gjr_series(n=1500)
+    px = prices_from(lr)
+    sm = summarize(run_monte_carlo(presets.collar_ki(1.0, 1.06, 1.12), px, 63, 0.0, "gbm", 2000, cdi_annual=0.12))
+    assert sm["excesso_cdi"] == pytest.approx(sm["media"] - (1.12 ** (63 / 252) - 1))

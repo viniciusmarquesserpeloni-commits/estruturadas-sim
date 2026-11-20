@@ -86,6 +86,9 @@ def summarize(res: BacktestResult) -> dict:
     ref = df["retorno_cdi_hoje"] if "retorno_cdi_hoje" in df else df.get("retorno_cdi")
     out["p_cdi"] = float(np.mean(r > ref.to_numpy(dtype=float) + TOL)) if ref is not None else float("nan")
     out["cdi_hoje"] = float(ref.iloc[0]) if ref is not None and "retorno_cdi_hoje" in df else float("nan")
+    # retorno médio − CDI de hoje no prazo: com retorno esperado = CDI (Monte Carlo neutro), mede o custo embutido
+    # da estrutura — o quanto ela rende, em média, abaixo (ou acima) do CDI
+    out["excesso_cdi"] = out["media"] - out["cdi_hoje"] if np.isfinite(out["cdi_hoje"]) else float("nan")
     if "retorno_cdi" in df and res.kind == "historico":
         era = df["retorno_cdi"].to_numpy(dtype=float)
         base = df["retorno_sem_ajuste"].to_numpy(dtype=float) if "retorno_sem_ajuste" in df else r
@@ -119,6 +122,7 @@ _ROWS = [
     ("p_max", "P(atingir o retorno máximo)", "pct"),
     ("media", "Retorno médio", "pct"),
     ("media_anual", "Retorno médio anualizado (base 252)", "pct"),
+    ("excesso_cdi", "Retorno médio − CDI de hoje (no prazo)", "pct"),
     ("mediana", "Mediana", "pct"),
     ("p5", "Percentil 5", "pct"),
     ("cvar5", "CVaR 5% (média dos 5% piores)", "pct"),

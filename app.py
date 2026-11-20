@@ -652,7 +652,11 @@ def _kpis(container, s: dict, scen=None, parts=None) -> None:
     k[2].metric("P(barreira acionada)", fmt_pct(s["p_barreira"], 1) if np.isfinite(s["p_barreira"]) else "—",
                 help=_band(s, "p_barreira", scen, parts) or None)
     k[3].metric("P(perda)", fmt_pct(s["p_perda"], 1), help=_band(s, "p_perda", scen, parts) or None)
-    k[4].metric("Retorno mediano", fmt_pct(s["mediana"]), help=f"Em R\\$: {md_brl(invested * s['mediana'])}")
+    k[4].metric("Retorno mediano", fmt_pct(s["mediana"]),
+                help=f"Média {fmt_pct(s['media'])}"
+                     + (f" ({fmt_num(100 * s['excesso_cdi'], 2)} p.p. em relação ao CDI de hoje no prazo)"
+                        if np.isfinite(s.get("excesso_cdi", np.nan)) else "")
+                     + f" · em R\\$: {md_brl(invested * s['mediana'])}")
     k[5].metric("CVaR 5%", fmt_pct(s["cvar5"]), help="Média dos 5% piores resultados")
     bands = [f"{lbl} ({_band(s, key, scen, parts)})" for key, lbl in
              (("p_lucro", "P(lucro)"), ("p_cdi", "P(> CDI de hoje)"), ("p_barreira", "P(barreira)"))

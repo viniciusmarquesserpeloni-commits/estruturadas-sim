@@ -181,28 +181,37 @@
 
   /* Monte Carlo FHS resumido (S_T, máximo, mínimo) + `keep` caminhos completos (fechamento, máxima,
      mínima e variância prevista para o dia seguinte). Mesma ordem de sorteios do Python. */
-  E.fhsSummary = function (g, nPaths, N, seed = 42, drift = 0, scale = 1, keep = 0, intraday = true) {
-    const rng = E.rng(seed), L = g.z.length, z = g.z, u = g.up, d = g.dn, s2 = scale * scale;
+  /* mu (retorno esperado anual) liga a correção martingal (E.martingaleFactors): duas passadas com os mesmos sorteios. */
+  E.fhsSummary = function (g, nPaths, N, seed = 42, drift = 0, scale = 1, keep = 0, intraday = true, mu = null) {
+    const L = g.z.length, z = g.z, u = g.up, d = g.dn, s2 = scale * scale;
     const { omega, alpha, gamma, beta } = g;
-    const sT = new Float64Array(nPaths), runMax = new Float64Array(nPaths), runMin = new Float64Array(nPaths);
-    const sample = [], sampleH = [], sampleL = [], sampleV = [];
-    for (let i = 0; i < nPaths; i++) {
-      let x = 0, h = g.hNext, mx = -Infinity, mn = Infinity;
-      const keepIt = sample.length < keep;
-      const row = keepIt ? new Float64Array(N) : null, rowH = keepIt && intraday ? new Float64Array(N) : null;
-      const rowL = keepIt && intraday ? new Float64Array(N) : null, rowV = keepIt ? new Float64Array(N) : null;
-      for (let j = 0; j < N; j++) {
-        const q = rng.int(L), sh = Math.sqrt(h), e = sh * z[q];
-        x += drift - 0.5 * s2 * h + scale * e;
-        const xu = intraday ? x + scale * sh * u[q] : x, xd = intraday ? x + scale * sh * d[q] : x;
-        if (xu > mx) mx = xu; if (xd < mn) mn = xd;
-        h = omega + (alpha + (e < 0 ? gamma : 0)) * (e * e) + beta * h;
-        if (row) { row[j] = Math.exp(x); rowV[j] = h; if (rowH) { rowH[j] = Math.exp(xu); rowL[j] = Math.exp(xd); } }
+    const core = (f, cb, keepN) => {
+      const rng = E.rng(seed), sT = new Float64Array(nPaths), runMax = new Float64Array(nPaths), runMin = new Float64Array(nPaths);
+      const sample = [], sampleH = [], sampleL = [], sampleV = [];
+      for (let i = 0; i < nPaths; i++) {
+        let x = 0, h = g.hNext, mx = -Infinity, mn = Infinity, last = 0;
+        const keepIt = sample.length < keepN;
+        const row = keepIt ? new Float64Array(N) : null, rowH = keepIt && intraday ? new Float64Array(N) : null;
+        const rowL = keepIt && intraday ? new Float64Array(N) : null, rowV = keepIt ? new Float64Array(N) : null;
+        for (let j = 0; j < N; j++) {
+          const q = rng.int(L), sh = Math.sqrt(h), e = sh * z[q];
+          x += drift - 0.5 * s2 * h + scale * e;
+          h = omega + (alpha + (e < 0 ? gamma : 0)) * (e * e) + beta * h;
+          if (cb) { cb(j, Math.exp(x)); continue; }
+          const fj = f ? f[j] : 1, c = Math.exp(x) * fj;
+          const cu = intraday ? Math.exp(x + scale * sh * u[q]) * fj : c, cd = intraday ? Math.exp(x + scale * sh * d[q]) * fj : c;
+          if (cu > mx) mx = cu; if (cd < mn) mn = cd;
+          last = c;
+          if (row) { row[j] = c; rowV[j] = h; if (rowH) { rowH[j] = cu; rowL[j] = cd; } }
+        }
+        if (cb) continue;
+        sT[i] = last; runMax[i] = mx; runMin[i] = mn;
+        if (row) { sample.push(row); sampleV.push(rowV); if (rowH) { sampleH.push(rowH); sampleL.push(rowL); } }
       }
-      sT[i] = Math.exp(x); runMax[i] = Math.exp(mx); runMin[i] = Math.exp(mn);
-      if (row) { sample.push(row); sampleV.push(rowV); if (rowH) { sampleH.push(rowH); sampleL.push(rowL); } }
-    }
-    return { sT, runMax, runMin, sample, sampleH: intraday ? sampleH : null, sampleL: intraday ? sampleL : null, sampleV };
+      return { sT, runMax, runMin, sample, sampleH: intraday ? sampleH : null, sampleL: intraday ? sampleL : null, sampleV };
+    };
+    const f = mu != null ? E.martingaleFactors(nPaths, N, mu, (cb) => core(null, cb, 0)) : null;
+    return core(f, null, keep);
   };
 
   /* Série da vol condicional anualizada por data (h[i] = prevista no fechamento do pregão i) e a vol realizada

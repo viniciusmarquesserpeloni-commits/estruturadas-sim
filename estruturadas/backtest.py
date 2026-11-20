@@ -176,6 +176,17 @@ def drift_annual(drift: str, cdi_annual: float, premium: float = 0.05, custom: f
     raise ValueError(f"Drift inválido: {drift}")
 
 
+def martingale_factors(close: np.ndarray, mu: float) -> np.ndarray:
+    """Correção martingal empírica (Duan e Simonato, 1998): fator de cada dia que faz a média dos caminhos
+    simulados bater exatamente com o retorno esperado pedido, (1 + mu)^(j/252). Corrige o pequeno viés da
+    aproximação −½·σ² com choques não normais (até −3% em 3 meses nas ações mais voláteis). Soma sequencial
+    entre os caminhos (mesma ordem do motor JS)."""
+    n_paths, n_days = close.shape
+    mean = np.cumsum(close, axis=0)[-1] / n_paths
+    target = (1.0 + mu) ** (np.arange(1, n_days + 1) / TRADING_DAYS)
+    return target / mean
+
+
 def bootstrap_ohlc_paths(lr: np.ndarray, n_paths: int, n_days: int, block: int = 20, seed: int = 42,
                          drift_daily: float | None = None, scale: float = 1.0, up=None, dn=None):
     """Bootstrap circular em blocos dos log-retornos diários (preserva parte da autocorrelação e da
@@ -230,7 +241,7 @@ def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cos
                     monitoring: str = "close", extra_cost: float = 0.0,
                     vol_window: int | None = None, premium: float = 0.05, custom: float | None = None,
                     vol_scale: float = 1.0, vol_model: str = "gjr", garch: GarchFit | None = None,
-                    vol_blend: bool = True) -> BacktestResult:
+                    vol_blend: bool = True, martingale: bool = True) -> BacktestResult:
     """Simula caminhos a partir do histórico e aplica a estrutura.
 
     Média dos 3 métodos (padrão): FHS-GARCH, bootstrap e GBM com ``n_paths``/3 caminhos cada, juntos — as
@@ -240,12 +251,14 @@ def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cos
     máxima e a mínima do dia); a vol de cada caminho evolui com os próprios choques. Com ``vol_blend``, a
     vol do prazo é combinada com a realizada de 252 pregões (``garch.blend_scale``).
     ``garch`` reaproveita um ajuste já feito (grade de cenários, calibração).
+    Com ``martingale`` (padrão) e retorno esperado definido, FHS e bootstrap passam pela correção martingal
+    (``martingale_factors``): a média dos caminhos de cada dia bate com (1 + mu)^(j/252).
     Bootstrap: sorteia blocos de dias reais (fechamento, máxima e mínima juntos), com a média trocada
     pelo drift escolhido e os desvios escalados por ``vol_scale``; com monitoramento intradiário usa a
     máxima/mínima sorteadas. GBM: só fechamentos; intradiário pela correção de Broadie-Glasserman-Kou."""
     if method == "media":
         return _run_ensemble(structure, prices, n_days, cost, n_paths, block, drift, cdi_annual, seed, monitoring,
-                             extra_cost, vol_window, premium, custom, vol_scale, vol_model, garch, vol_blend)
+                             extra_cost, vol_window, premium, custom, vol_scale, vol_model, garch, vol_blend, martingale)
     lr, up, dn = ohlc_log_returns(prices)
     mu = drift_annual(drift, cdi_annual, premium, custom)
     high = low = hv = None
@@ -259,15 +272,22 @@ def run_monte_carlo(structure: Structure, prices: pd.DataFrame, n_days: int, cos
     else:
         sigma_base = float(np.std(lr[-vol_window:] if vol_window else lr, ddof=1) * np.sqrt(TRADING_DAYS))
     sigma = sigma_base * vol_scale
-    if method == "fhs_garch":
-        close, high, low, hv = fhs_paths(garch, n_paths, n_days, seed, fhs_drift_daily(lr, mu, scale_eff), scale_eff,
-                                         intraday=monitoring == "intraday")
-        if monitoring != "intraday":
+    if method in ("fhs_garch", "bootstrap"):
+        if method == "fhs_garch":
+            close, high, low, hv = fhs_paths(garch, n_paths, n_days, seed, fhs_drift_daily(lr, mu, scale_eff), scale_eff,
+                                             intraday=monitoring == "intraday")
+            if monitoring != "intraday":
+                high = low = close
+        else:
+            close, high, low = bootstrap_ohlc_paths(lr, n_paths, n_days, block, seed,
+                                                    bootstrap_drift_daily(lr, mu, vol_scale), vol_scale, up, dn)
+        if mu is not None and martingale:
+            f = martingale_factors(close, mu)
+            same = high is close
+            close = close * f
+            high, low = (close, close) if same else (high * f, low * f)
+        if method == "fhs_garch" and monitoring != "intraday":
             high = low = None
-        ev = evaluate_paths(structure, close, high, low, monitoring)
-    elif method == "bootstrap":
-        close, high, low = bootstrap_ohlc_paths(lr, n_paths, n_days, block, seed,
-                                                bootstrap_drift_daily(lr, mu, vol_scale), vol_scale, up, dn)
         ev = evaluate_paths(structure, close, high, low, monitoring)
     elif method == "gbm":
         close = gbm_paths(n_paths, n_days, sigma, gbm_drift_daily(lr, sigma, drift, cdi_annual, premium, custom),
@@ -299,7 +319,7 @@ def _probabilities(structure: Structure, df: pd.DataFrame) -> dict:
 
 
 def _run_ensemble(structure, prices, n_days, cost, n_paths, block, drift, cdi_annual, seed, monitoring, extra_cost,
-                  vol_window, premium, custom, vol_scale, vol_model, garch, vol_blend) -> BacktestResult:
+                  vol_window, premium, custom, vol_scale, vol_model, garch, vol_blend, martingale=True) -> BacktestResult:
     """Média dos 3 métodos: cada um com n_paths/3 caminhos; os caminhos ficam juntos (média das probabilidades)."""
     if garch is None:
         lr, up, dn = ohlc_log_returns(prices)
@@ -307,7 +327,7 @@ def _run_ensemble(structure, prices, n_days, cost, n_paths, block, drift, cdi_an
     per = int(math.ceil(n_paths / len(ENSEMBLE)))
     parts = [run_monte_carlo(structure, prices, n_days, cost, m, per, block, drift, cdi_annual, seed, monitoring,
                              extra_cost, vol_window, premium, custom, vol_scale, vol_model,
-                             garch if m == "fhs_garch" else None, vol_blend) for m in ENSEMBLE]
+                             garch if m == "fhs_garch" else None, vol_blend, martingale) for m in ENSEMBLE]
     df = pd.concat([p.df for p in parts], ignore_index=True)
     first = parts[0].meta
     samples = [p.meta["paths_sample"] for p in parts]

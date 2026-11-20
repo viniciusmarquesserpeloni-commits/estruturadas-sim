@@ -29,7 +29,7 @@
       UI.kpi("P(retorno > CDI de hoje)", F.pct(sm.p_cdi, 1, false), band("p_cdi", `CDI no prazo: ${F.pct(sm.cdi_hoje, 2, false)}`)),
       UI.kpi("P(barreira acionada)", hasBar ? F.pct(sm.p_barreira, 1, false) : "—", hasBar ? band("p_barreira", "") : "estrutura sem barreira"),
       UI.kpi("P(perda)", F.pct(sm.p_perda, 1, false), band("p_perda", `pior: ${F.pct(sm.pior)}`)),
-      UI.kpi("Retorno mediano", App.signed(sm.mediana), `média ${F.pct(sm.media)} · ${F.brl(invested * sm.mediana)}`),
+      UI.kpi("Retorno mediano", App.signed(sm.mediana), `média ${F.pct(sm.media)}${isFinite(sm.excesso_cdi) ? ` (${F.num(sm.excesso_cdi * 100, 2)} p.p. vs CDI)` : ""} · ${F.brl(invested * sm.mediana)}`),
       UI.kpi("CVaR 5%", App.signed(sm.cvar5), `média dos 5% piores · P5 ${F.pct(sm.p5)}`),
     ].join("");
   };

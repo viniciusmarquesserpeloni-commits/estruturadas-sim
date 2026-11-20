@@ -362,3 +362,18 @@ test("prioridade 2: vol combinada com 252 pregões, média dos 3 métodos e saí
   assert.ok(Number.isNaN(E.hacT([1, 1, 1, 1], 2)));
   assert.ok(E.hacT(Array.from({ length: 200 }, (_, i) => 0.01 + 0.02 * Math.sin(i)), 5) > 2);
 });
+
+test("prioridade 3: correção martingal da média dos caminhos e retorno médio − CDI", () => {
+  const P = P2(), s = E.PRESETS.collar_ki.build(1.0, 1.06, 1.12), target = Math.pow(1.12, 63 / 252);
+  for (const method of ["fhs_garch", "bootstrap"]) {
+    const r = E.runMonteCarlo(s, P, 63, 0, { method, nPaths: 3000, cdiAnnual: 0.12, seed: 4 });
+    let m = 0; for (const v of r.sT) m += v; m /= r.sT.length;
+    close(m, target, 1e-12, method + ": E[S_T] = (1 + CDI)^(N/252)");
+    const raw = E.runMonteCarlo(s, P, 63, 0, { method, nPaths: 3000, cdiAnnual: 0.12, seed: 4, martingale: false });
+    let m0 = 0; for (const v of raw.sT) m0 += v; m0 /= raw.sT.length;
+    assert.ok(Math.abs(m0 - target) > 1e-6, method + " sem correção");
+    for (let i = 0; i < 20; i++) for (let j = 0; j < 63; j += 7) assert.ok(r.sample[i][j] > 0);
+  }
+  const sm = E.summarize(E.runMonteCarlo(s, P, 63, 0, { method: "gbm", nPaths: 2000, cdiAnnual: 0.12 }));
+  close(sm.excesso_cdi, sm.media - (target - 1), 1e-12, "retorno médio − CDI");
+});

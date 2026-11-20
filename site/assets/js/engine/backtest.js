@@ -191,31 +191,48 @@
   /* Bootstrap circular em blocos (resumo + amostra de caminhos). o.driftDaily troca a média e o.scale escala os
      desvios: lr* = drift + scale·(lr − média). Com o.up/o.dn, sorteia junto a máxima/mínima do dia; o.intraday
      faz o resumo (máximo/mínimo) usar esses extremos em vez do fechamento. */
+  /* Correção martingal empírica (Duan e Simonato, 1998), ver martingale_factors no Python: fator de cada dia que faz
+     a média dos caminhos bater com (1 + mu)^(j/252). pass(cb) roda a simulação chamando cb(j, S) para cada fechamento;
+     a soma segue a mesma ordem do Python (caminho a caminho). */
+  E.martingaleFactors = function (nPaths, N, mu, pass) {
+    const sums = new Float64Array(N), f = new Float64Array(N);
+    pass((j, v) => { sums[j] += v; });
+    for (let j = 0; j < N; j++) f[j] = Math.pow(1 + mu, (j + 1) / TD) / (sums[j] / nPaths);
+    return f;
+  };
+  /* o.mu (retorno esperado anual) liga a correção martingal (duas passadas com os mesmos sorteios). */
   E.blockBootstrapSummary = function (lr, nPaths, N, block = 20, seed = 42, keep = 0, o = {}) {
     if (lr.length < 2) throw new Error("Histórico insuficiente para o bootstrap.");
     block = Math.max(1, Math.min(block, lr.length));
-    const rng = E.rng(seed), L = lr.length, scale = o.scale ?? 1, hl = !!(o.up && o.dn);
+    const L = lr.length, scale = o.scale ?? 1, hl = !!(o.up && o.dn);
     const raw = o.driftDaily == null && scale === 1, m = raw ? 0 : meanOf(lr), d = o.driftDaily == null ? m : o.driftDaily;
-    const sT = new Float64Array(nPaths), runMax = new Float64Array(nPaths), runMin = new Float64Array(nPaths);
-    const sample = [], sampleH = [], sampleL = [];
-    for (let i = 0; i < nPaths; i++) {
-      let x = 0, mx = -Infinity, mn = Infinity, j = 0, pos = 0;
-      const keepIt = sample.length < keep;
-      const row = keepIt ? new Float64Array(N) : null, rowH = keepIt && hl ? new Float64Array(N) : null, rowL = keepIt && hl ? new Float64Array(N) : null;
-      while (j < N) {
-        if (j % block === 0) pos = rng.int(L);
-        const q = (pos + (j % block)) % L;
-        x += raw ? lr[q] : d + scale * (lr[q] - m);
-        const xu = hl ? x + scale * o.up[q] : x, xd = hl ? x + scale * o.dn[q] : x;
-        const a = o.intraday && hl ? xu : x, b = o.intraday && hl ? xd : x;
-        if (a > mx) mx = a; if (b < mn) mn = b;
-        if (row) { row[j] = Math.exp(x); if (rowH) { rowH[j] = Math.exp(xu); rowL[j] = Math.exp(xd); } }
-        j++;
+    const core = (f, cb, keepN) => {
+      const rng = E.rng(seed), sT = new Float64Array(nPaths), runMax = new Float64Array(nPaths), runMin = new Float64Array(nPaths);
+      const sample = [], sampleH = [], sampleL = [];
+      for (let i = 0; i < nPaths; i++) {
+        let x = 0, mx = -Infinity, mn = Infinity, j = 0, pos = 0, last = 0;
+        const keepIt = sample.length < keepN;
+        const row = keepIt ? new Float64Array(N) : null, rowH = keepIt && hl ? new Float64Array(N) : null, rowL = keepIt && hl ? new Float64Array(N) : null;
+        while (j < N) {
+          if (j % block === 0) pos = rng.int(L);
+          const q = (pos + (j % block)) % L;
+          x += raw ? lr[q] : d + scale * (lr[q] - m);
+          const fj = f ? f[j] : 1, c = Math.exp(x) * fj;
+          if (cb) { cb(j, Math.exp(x)); j++; continue; }
+          const cu = hl ? Math.exp(x + scale * o.up[q]) * fj : c, cd = hl ? Math.exp(x + scale * o.dn[q]) * fj : c;
+          const a = o.intraday && hl ? cu : c, b = o.intraday && hl ? cd : c;
+          if (a > mx) mx = a; if (b < mn) mn = b;
+          if (row) { row[j] = c; if (rowH) { rowH[j] = cu; rowL[j] = cd; } }
+          last = c; j++;
+        }
+        if (cb) continue;
+        sT[i] = last; runMax[i] = mx; runMin[i] = mn;
+        if (row) { sample.push(row); if (rowH) { sampleH.push(rowH); sampleL.push(rowL); } }
       }
-      sT[i] = Math.exp(x); runMax[i] = Math.exp(mx); runMin[i] = Math.exp(mn);
-      if (row) { sample.push(row); if (rowH) { sampleH.push(rowH); sampleL.push(rowL); } }
-    }
-    return { sT, runMax, runMin, sample, sampleH: hl ? sampleH : null, sampleL: hl ? sampleL : null };
+      return { sT, runMax, runMin, sample, sampleH: hl ? sampleH : null, sampleL: hl ? sampleL : null };
+    };
+    const f = o.mu != null ? E.martingaleFactors(nPaths, N, o.mu, (cb) => core(null, cb, 0)) : null;
+    return core(f, null, keep);
   };
   /* Drift logarítmico diário do GBM: (ln(1 + mu) − σ²/2)·Δt, ou a média histórica. */
   E.gbmDriftDaily = function (lr, sigma, drift, cdiAnnual, premium = 0.05, custom = null) {
@@ -238,9 +255,9 @@
     const sigmaBase = g ? E.termVol(g, g.hNext, N) * blend : Math.sqrt(varOf(lr) * TD), sigma = sigmaBase * volScale, mu = E.driftAnnual(drift, cdiAnnual, premium, custom);
     let sum, shift = 0;
     if (method === "fhs_garch") {
-      sum = E.fhsSummary(g, nPaths, N, seed, E.fhsDriftDaily(lr, mu, volScaleEff), volScaleEff, keep, monitoring === "intraday");
+      sum = E.fhsSummary(g, nPaths, N, seed, E.fhsDriftDaily(lr, mu, volScaleEff), volScaleEff, keep, monitoring === "intraday", o.martingale !== false ? mu : null);
     } else if (method === "bootstrap") {
-      sum = E.blockBootstrapSummary(lr, nPaths, N, block, seed, keep, { driftDaily: E.bootstrapDriftDaily(lr, mu, volScale), scale: volScale, up, dn, intraday: monitoring === "intraday" });
+      sum = E.blockBootstrapSummary(lr, nPaths, N, block, seed, keep, { driftDaily: E.bootstrapDriftDaily(lr, mu, volScale), scale: volScale, up, dn, intraday: monitoring === "intraday", mu: o.martingale !== false ? mu : null });
     } else if (method === "gbm") {
       sum = E.gbmSummary(nPaths, N, sigma, E.gbmDriftDaily(lr, sigma, drift, cdiAnnual, premium, custom), seed, true, keep);
       shift = monitoring === "intraday" ? E.BGK_BETA * sigma * Math.sqrt(1 / TD) : 0;
@@ -357,6 +374,8 @@
     const hoje = res.cdiHoje != null, ref = (i) => (hoje ? res.cdiHoje : res.cdi[i]);
     out.p_cdi = hoje || res.cdi ? frac(r, (v, i) => v > ref(i) + TOL) : NaN;
     out.cdi_hoje = hoje ? res.cdiHoje : NaN;
+    // retorno médio − CDI de hoje no prazo: no Monte Carlo neutro (retorno esperado = CDI), o custo embutido da estrutura
+    out.excesso_cdi = hoje ? out.media - res.cdiHoje : NaN;
     if (res.cdi && res.kind === "historico") {
       const base = res.retRaw || r;
       out.p_cdi_epoca = frac(base, (v, i) => v > res.cdi[i] + TOL);
@@ -379,7 +398,7 @@
     ["n", "Nº de janelas / caminhos", "int"], ["nEff", "Amostra efetiva (janelas não sobrepostas)", "int"],
     ["p_lucro", "P(lucro > 0)", "pct"], ["p_cdi", "P(retorno > CDI de hoje)", "pct"], ["p_barreira", "P(barreira acionada)", "pct"],
     ["p_perda", "P(perda)", "pct"], ["p_cdi_epoca", "P(retorno > CDI da época)", "pct"], ["p_zero", "P(retorno = 0)", "pct"], ["p_max", "P(atingir o retorno máximo)", "pct"], ["@barreiras", "", ""],
-    ["media", "Retorno médio", "pct"], ["media_anual", "Retorno médio anualizado (base 252)", "pct"], ["mediana", "Mediana", "pct"],
+    ["media", "Retorno médio", "pct"], ["media_anual", "Retorno médio anualizado (base 252)", "pct"], ["excesso_cdi", "Retorno médio − CDI de hoje (no prazo)", "pct"], ["mediana", "Mediana", "pct"],
     ["p5", "Percentil 5", "pct"], ["cvar5", "CVaR 5% (média dos 5% piores)", "pct"], ["p25", "Percentil 25", "pct"], ["p75", "Percentil 75", "pct"], ["p95", "Percentil 95", "pct"],
     ["pior", "Pior", "pct"], ["melhor", "Melhor", "pct"],
     ["acao_media", "Só a ação: retorno médio", "pct"], ["acao_media_anual", "Só a ação: retorno médio anualizado", "pct"],
