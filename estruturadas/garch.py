@@ -15,8 +15,14 @@ atualiza h pela equação acima: a vol simulada reage aos próprios choques e co
 longo prazo no ritmo estimado (meia-vida). A máxima e a mínima do dia sorteado vão junto, também
 padronizadas pela vol GARCH daquele dia.
 
+Estimação com **alvo de variância** (variance targeting; Engle e Mezrich, 1996): a variância de longo
+prazo fica presa à variância amostral (ω = s²·(1 − persistência)) e só a dinâmica (α, γ, β) é estimada.
+Com a variância de longo prazo livre, um choque extremo ou um dado errado levava o ajuste a valores
+absurdos em 15 de 94 ações (vol de longo prazo de até 1.045%); com o alvo, a calibração das
+probabilidades fica igual e esses casos somem (docs/ANALISE_CRITICA_2026-11.md).
+
 Otimizador: Nelder-Mead determinístico, idêntico ao do motor JS (engine/garch.js), numa
-parametrização sem restrições que garante ω > 0, α, γ, β ≥ 0 e persistência < 0,999.
+parametrização sem restrições que garante α, γ, β ≥ 0 e persistência < 0,999.
 """
 from __future__ import annotations
 
@@ -33,6 +39,8 @@ VOL_MODEL_LABELS = {"gjr": "GJR-GARCH (assimétrico)", "garch": "GARCH(1,1)"}
 P_MAX = 0.999  # persistência máxima na estimação
 MIN_OBS = 250  # mínimo de log-retornos para estimar o modelo
 RESTARTS = 5  # reinícios do Nelder-Mead a partir do melhor ponto
+P_CAP = 0.9999  # teto da persistência usada nas previsões
+P_WARN = 0.997  # a partir daqui a vol quase não volta à média: o painel avisa
 
 
 def _exp(x: float) -> float:
@@ -58,21 +66,19 @@ def _seqsum(a) -> float:
 
 
 def unpack_params(x, model: str, s2: float) -> tuple[float, float, float, float]:
-    """Parâmetros irrestritos -> (ω, α, γ, β).
+    """Parâmetros irrestritos -> (ω, α, γ, β), com alvo de variância: ω = s²·(1 − p).
 
-    x[0]: log da variância de longo prazo relativa à amostral; x[1]: persistência p = α + γ/2 + β
-    (logística em (0; 0,999)); x[2]: fração de p que vem dos choques (α + γ/2) contra β; x[3] (GJR):
-    fração dos choques que é assimétrica (γ/2 contra α)."""
-    v_long = s2 * _exp(x[0])
-    p = P_MAX * _logistic(x[1])
-    a = _logistic(x[2])
+    x[0]: persistência p = α + γ/2 + β (logística em (0; 0,999)); x[1]: fração de p que vem dos choques
+    (α + γ/2) contra β; x[2] (GJR): fração dos choques que é assimétrica (γ/2 contra α)."""
+    p = P_MAX * _logistic(x[0])
+    a = _logistic(x[1])
     shock, beta = a * p, (1.0 - a) * p
     if model == "gjr":
-        g = _logistic(x[3])
+        g = _logistic(x[2])
         gamma, alpha = 2.0 * g * shock, (1.0 - g) * shock
     else:
         gamma, alpha = 0.0, shock
-    return v_long * (1.0 - p), alpha, gamma, beta
+    return s2 * (1.0 - p), alpha, gamma, beta
 
 
 START_POINTS = ((0.97, 0.08, 0.625), (0.90, 0.12, 0.5))  # (persistência, choques, fração assimétrica no GJR)
@@ -83,7 +89,7 @@ def start_params(model: str, k: int = 0) -> list[float]:
     """Pontos iniciais: persistência 0,97 com choques 0,08 (no GJR, 3/8 simétricos e 5/8 assimétricos) e
     persistência 0,90 com choques 0,12."""
     p, shock, g = START_POINTS[k]
-    x = [0.0, _logit(p / P_MAX), _logit(shock / p)]
+    x = [_logit(p / P_MAX), _logit(shock / p)]
     return x + [_logit(g)] if model == "gjr" else x
 
 
@@ -178,7 +184,12 @@ class GarchFit:
     @property
     def persistence(self) -> float:
         """α + γ·κ + β: quanto de um choque na variância sobra no dia seguinte."""
-        return min(self.alpha + self.gamma * self.kappa + self.beta, 0.9999)
+        return min(self.alpha + self.gamma * self.kappa + self.beta, P_CAP)
+
+    @property
+    def at_limit(self) -> bool:
+        """Persistência no limite: a vol prevista quase não volta à média (ajuste pouco confiável)."""
+        return self.persistence >= P_WARN
 
     @property
     def h_next(self) -> float:
@@ -230,16 +241,8 @@ def filtered(lr, omega: float, alpha: float, gamma: float, beta: float, model: s
     return GarchFit(model, omega, alpha, gamma, beta, m, s2, ll, n, h, z, u, d, kappa, iterations)
 
 
-def fit_garch(lr, model: str = "gjr", up=None, dn=None) -> GarchFit:
-    """Estima o GARCH(1,1) ou o GJR-GARCH(1,1) por quase-máxima verossimilhança gaussiana."""
-    if model not in VOL_MODEL_LABELS:
-        raise ValueError(f"Modelo de vol inválido: {model}")
-    lr = np.asarray(lr, dtype=float)
-    if len(lr) < MIN_OBS:
-        raise ValueError(f"Histórico insuficiente para o GARCH: {len(lr)} retornos (mínimo {MIN_OBS}).")
-    n = len(lr)
-    eps = lr - _seqsum(lr) / n
-    s2 = _seqsum(eps * eps) / n
+def optimize(eps, model: str, s2: float):
+    """Minimiza a verossimilhança negativa: devolve (parâmetros irrestritos, valor, iterações)."""
     f = lambda v: _neg_loglik(v, eps, model, s2)  # noqa: E731
     # o Nelder-Mead pode estagnar antes do ótimo (simplex degenerado numa região plana): parte de dois pontos
     # iniciais e, em cada um, reinicia a partir do melhor ponto até não haver melhora
@@ -257,8 +260,29 @@ def fit_garch(lr, model: str = "gjr", up=None, dn=None) -> GarchFit:
                 break
         if best is None or fx < best[1]:
             best = (x, fx)
-    omega, alpha, gamma, beta = unpack_params(best[0], model, s2)
-    return filtered(lr, omega, alpha, gamma, beta, model, up, dn, it)
+    return best[0], best[1], it
+
+
+TARGET_PASSES = 4  # repasses do alvo de variância (o κ dos resíduos muda um pouco quando ω muda)
+
+
+def fit_garch(lr, model: str = "gjr", up=None, dn=None) -> GarchFit:
+    """Estima o GARCH(1,1) ou o GJR-GARCH(1,1) por quase-máxima verossimilhança gaussiana, com alvo de variância."""
+    if model not in VOL_MODEL_LABELS:
+        raise ValueError(f"Modelo de vol inválido: {model}")
+    lr = np.asarray(lr, dtype=float)
+    if len(lr) < MIN_OBS:
+        raise ValueError(f"Histórico insuficiente para o GARCH: {len(lr)} retornos (mínimo {MIN_OBS}).")
+    n = len(lr)
+    eps = lr - _seqsum(lr) / n
+    s2 = _seqsum(eps * eps) / n
+    x, _, it = optimize(eps, model, s2)
+    omega, alpha, gamma, beta = unpack_params(x, model, s2)
+    # o alvo usa a persistência efetiva (com o κ dos resíduos, não 0,5): assim ω/(1 − p) = variância amostral
+    fit = filtered(lr, omega, alpha, gamma, beta, model, up, dn, it)
+    for _ in range(TARGET_PASSES):
+        fit = filtered(lr, s2 * (1.0 - fit.persistence), alpha, gamma, beta, model, up, dn, it)
+    return fit
 
 
 def expected_var(fit: GarchFit, h1, k):
@@ -292,6 +316,7 @@ def vol_panel(fit: GarchFit, lr, n_days: int, window: int = 63) -> dict:
         "vol_realizada": float(np.std(tail, ddof=1) * math.sqrt(TRADING_DAYS)) if len(tail) > 1 else float("nan"),
         "meia_vida": fit.half_life,
         "persistencia": fit.persistence,
+        "no_limite": fit.at_limit,
         "alpha": fit.alpha, "gamma": fit.gamma, "beta": fit.beta, "omega": fit.omega,
         "n": fit.n, "bic": fit.bic,
     }

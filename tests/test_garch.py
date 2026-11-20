@@ -10,8 +10,8 @@ from estruturadas import presets
 from estruturadas.backtest import run_monte_carlo
 from estruturadas.calibration import walk_forward
 from estruturadas.early_exit import EarlyExitConfig, run_historical_exit, run_mc_exit
-from estruturadas.garch import (_neg_loglik, expected_var, fhs_paths, filtered, fit_garch, start_params, term_var,
-                                vol_panel)
+from estruturadas.garch import (_neg_loglik, expected_var, fhs_paths, filtered, fit_garch, optimize, start_params,
+                                term_var, vol_panel)
 from estruturadas.metrics import summarize, summarize_exit
 from estruturadas.rng import Mulberry32, integers, uniforms
 
@@ -54,9 +54,8 @@ def test_ajuste_recupera_parametros_simulados():
         ref = min(minimize(lambda v: _neg_loglik(v, eps, "gjr", s2), start_params("gjr", k), method="Nelder-Mead",
                            options={"xatol": 1e-10, "fatol": 1e-14, "maxiter": 40000, "maxfev": 80000}).fun
                   for k in (0, 1))
-        fx = fit_garch(x, "gjr")
-        assert -fx.loglik / len(x) - 0.5 * math.log(2 * math.pi) <= ref + 1e-9
-        assert fx.persistence < 0.995
+        assert optimize(eps, "gjr", s2)[1] <= ref + 1e-9
+        assert fit_garch(x, "gjr").persistence < 0.995
 
 
 def test_previsao_e_vol_do_prazo():
@@ -148,3 +147,19 @@ def test_calibracao_walk_forward():
     assert rel["n"].sum() == len(df)
     with pytest.raises(ValueError):
         walk_forward(s, px.iloc[:400], 21, 0.0)
+
+
+def test_alvo_de_variancia_prende_a_vol_de_longo_prazo():
+    lr = gjr_series()
+    g = fit_garch(lr, "gjr")
+    s2 = float(np.mean((lr - lr.mean()) ** 2))
+    assert g.long_run_var == pytest.approx(s2, rel=0.02) and not g.at_limit
+    # um dado absurdo (−66% num dia, como um desdobramento não ajustado) e um crash no fim: sem o alvo, o ajuste
+    # ia para a borda (vol de longo prazo de centenas de %); com o alvo, ela continua sendo a amostral
+    bad = lr.copy()
+    bad[700] = -1.08
+    bad = np.r_[bad, -0.45, 0.02]
+    b = fit_garch(bad, "gjr")
+    s2b = float(np.mean((bad - bad.mean()) ** 2))
+    assert b.long_run_var == pytest.approx(s2b, rel=0.02)
+    assert vol_panel(b, bad, 63)["no_limite"] == b.at_limit

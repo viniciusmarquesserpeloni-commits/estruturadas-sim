@@ -1,28 +1,29 @@
 /* Vol condicional (GARCH(1,1) / GJR-GARCH) e Monte Carlo FHS — porta de estruturadas/garch.py.
    h[t+1] = ω + (α + γ·1[ε_t<0])·ε_t² + β·h[t], por quase-máxima verossimilhança gaussiana (Nelder-Mead
-   determinístico, igual ao do Python). FHS (Barone-Adesi, Giannopoulos & Vosper, 1999): choques
+   determinístico, igual ao do Python) com alvo de variância: ω = s²·(1 − persistência) — a vol de longo prazo
+   fica presa à amostral e só a dinâmica (α, γ, β) é estimada. FHS (Barone-Adesi, Giannopoulos & Vosper, 1999): choques
    padronizados reais z = ε/√h sorteados a partir da vol de hoje, com a vol de cada caminho evoluindo. */
 (function (root) {
   "use strict";
   const E = root.Estr;
-  const TD = 252, P_MAX = 0.999;
+  const TD = 252, P_MAX = 0.999, P_CAP = 0.9999, P_WARN = 0.997;
   E.VOL_MODEL_LABELS = { gjr: "GJR-GARCH (assimétrico)", garch: "GARCH(1,1)" };
   E.GARCH_MIN_OBS = 250;
   E.GARCH_RESTARTS = 5;
   const logistic = (x) => 1 / (1 + Math.exp(-x)), logit = (p) => Math.log(p / (1 - p));
   const seqsum = (a) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]; return s; };
 
-  /* Parâmetros irrestritos -> [ω, α, γ, β] (ver unpack_params no Python). */
+  /* Parâmetros irrestritos -> [ω, α, γ, β], com alvo de variância (ver unpack_params no Python). */
   E.garchUnpack = function (x, model, s2) {
-    const vLong = s2 * Math.exp(x[0]), p = P_MAX * logistic(x[1]), a = logistic(x[2]);
+    const p = P_MAX * logistic(x[0]), a = logistic(x[1]);
     const shock = a * p, beta = (1 - a) * p;
     let gamma = 0, alpha = shock;
-    if (model === "gjr") { const g = logistic(x[3]); gamma = 2 * g * shock; alpha = (1 - g) * shock; }
-    return [vLong * (1 - p), alpha, gamma, beta];
+    if (model === "gjr") { const g = logistic(x[2]); gamma = 2 * g * shock; alpha = (1 - g) * shock; }
+    return [s2 * (1 - p), alpha, gamma, beta];
   };
   /* Pontos iniciais (persistência, choques, fração assimétrica no GJR) e passo do simplex: iguais ao Python. */
   const START_POINTS = [[0.97, 0.08, 0.625], [0.90, 0.12, 0.5]], NM_STEP = 0.25;
-  const startParams = (model, k = 0) => { const [p, shock, g] = START_POINTS[k], x = [0, logit(p / P_MAX), logit(shock / p)]; if (model === "gjr") x.push(logit(g)); return x; };
+  const startParams = (model, k = 0) => { const [p, shock, g] = START_POINTS[k], x = [logit(p / P_MAX), logit(shock / p)]; if (model === "gjr") x.push(logit(g)); return x; };
 
   /* Variância condicional (n+1): h[0] = h0; h[n] = previsão para o próximo pregão. */
   E.garchFilter = function (eps, omega, alpha, gamma, beta, h0) {
@@ -85,7 +86,8 @@
   };
   /* Acrescenta as grandezas derivadas (persistência, variância de longo prazo, meia-vida, BIC). */
   E.garchSummary = function (g) {
-    g.persistence = Math.min(g.alpha + g.gamma * g.kappa + g.beta, 0.9999);
+    g.persistence = Math.min(g.alpha + g.gamma * g.kappa + g.beta, P_CAP);
+    g.atLimit = g.persistence >= P_WARN; // a vol prevista quase não volta à média: o painel avisa
     g.hNext = g.h[g.h.length - 1];
     g.longRunVar = g.omega / (1 - g.persistence);
     g.halfLife = Math.log(0.5) / Math.log(g.persistence);
@@ -122,7 +124,10 @@
       if (!best || r.f < best.f) best = r;
     }
     const [omega, alpha, gamma, beta] = E.garchUnpack(best.x, model, s2);
-    return E.garchFiltered(lr, omega, alpha, gamma, beta, model, up, dn, it);
+    // o alvo usa a persistência efetiva (com o κ dos resíduos): assim ω/(1 − p) = variância amostral
+    let fit = E.garchFiltered(lr, omega, alpha, gamma, beta, model, up, dn, it);
+    for (let k = 0; k < 4; k++) fit = E.garchFiltered(lr, s2 * (1 - fit.persistence), alpha, gamma, beta, model, up, dn, it);
+    return fit;
   };
 
   /* Variância diária média esperada nos próximos m pregões, dado h_{T+1} = h1. */
@@ -138,7 +143,7 @@
     let v = 0; for (let i = 0; i < tail.length; i++) v += (tail[i] - m) * (tail[i] - m);
     return { modelo: E.VOL_MODEL_LABELS[g.model], vol_hoje: Math.sqrt(g.hNext * TD), vol_longo_prazo: Math.sqrt(g.longRunVar * TD),
       vol_prazo: E.termVol(g, g.hNext, N), vol_realizada: tail.length > 1 ? Math.sqrt(v / (tail.length - 1) * TD) : NaN,
-      meia_vida: g.halfLife, persistencia: g.persistence, alpha: g.alpha, gamma: g.gamma, beta: g.beta, omega: g.omega, n: g.n, bic: g.bic };
+      meia_vida: g.halfLife, persistencia: g.persistence, no_limite: g.atLimit, alpha: g.alpha, gamma: g.gamma, beta: g.beta, omega: g.omega, n: g.n, bic: g.bic };
   };
 
   /* Drift diário do FHS (ver fhs_drift_daily no Python). */

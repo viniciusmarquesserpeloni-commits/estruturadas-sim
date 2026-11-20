@@ -4,6 +4,9 @@ No ajuste do projeto a variância de longo prazo é um parâmetro livre; com um 
 pode ir a valores absurdos. Com alvo de variância (Engle e Mezrich, 1996) ela fica presa à variância amostral
 (ω = s²·(1 − p)) e só a dinâmica (α, γ, β) é estimada.
 
+Nota: o alvo de variância foi adotado no motor depois desta análise. Para reproduzir a comparação "livre ×
+alvo" (modo fits), use o commit cd1edbf; nos commits seguintes os dois lados dão o mesmo ajuste.
+
 Modos:
   fits  <pasta com todas as ações>            conta ajustes degenerados com e sem alvo de variância
   vol   <pasta> <saida.json>                  repete o exp4 (QLIKE) com alvo de variância
@@ -24,6 +27,8 @@ from estruturadas import garch as G  # noqa: E402
 
 
 def fit_vt(lr, model="gjr", up=None, dn=None):
+    if len(G.start_params("garch")) == 2:  # motor já com alvo de variância (adotado depois desta análise)
+        return G.fit_garch(lr, model, up, dn)
     lr = np.asarray(lr, dtype=float)
     n = len(lr)
     if n < G.MIN_OBS:
