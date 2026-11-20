@@ -46,7 +46,12 @@ qualquer do passado".
 
 **6. Monte Carlo (complemento).**
 
-- *FHS-GARCH* (padrão; *Filtered Historical Simulation*, Barone-Adesi, Giannopoulos & Vosper, 1999): primeiro
+- *Média dos 3 métodos* (padrão): os três métodos abaixo, com 1/3 dos caminhos cada, juntos — cada probabilidade
+  é a média das três. Cada método tem um ponto fraco (o FHS exagera a vol logo depois de choques, o bootstrap usa a
+  vol média do passado, o GBM supõe retornos normais); nos testes fora da amostra, a combinação foi a única previsão
+  com ganho significativo sobre a frequência histórica tanto na barreira do Collar KI quanto num evento só de vol.
+  Os indicadores mostram também o menor e o maior valor entre os três ("métodos").
+- *FHS-GARCH* (*Filtered Historical Simulation*, Barone-Adesi, Giannopoulos & Vosper, 1999): primeiro
   estima-se a vol de cada dia do histórico por um **GJR-GARCH(1,1)** (ou GARCH(1,1)):
   h(t+1) = ω + (α + γ·1[ε(t) < 0])·ε(t)² + β·h(t), por máxima verossimilhança gaussiana com **alvo de variância**
   (a vol de longo prazo fica presa à do próprio histórico e só a dinâmica α, γ, β é estimada — sem isso, um choque
@@ -67,18 +72,25 @@ qualquer do passado".
   o log-retorno de cada dia é ln(1 + μ)/252 − h/2 + √h·z*, o que dá o mesmo E[S_T].
 - *Sensibilidade às premissas:* com milhares de caminhos o erro de sorteio é desprezível; a incerteza que importa
   é de premissa. Por isso roda-se uma grade de 9 cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol
-  {0,8; 1,0; 1,2} × a vol de base (no FHS, a vol média prevista para o prazo) —, com os mesmos números
-  aleatórios, e as faixas dos indicadores mostram o mínimo e o máximo entre eles.
-- *Painel de volatilidade (FHS):* vol de hoje (previsão para o próximo pregão), vol média prevista para o prazo
-  (a usada no Monte Carlo), vol de longo prazo √(ω/(1 − p)), meia-vida ln(0,5)/ln(p) pregões (p = α + γ·κ + β, a
-  persistência; κ = fração média de z² vinda de quedas) e a vol realizada de 63 pregões. A vol média do prazo é
-  v_L + (h − v_L)·(1 − p^N)/(N·(1 − p)).
+  {0,6; 1,0; 1,3} × a vol de base (no FHS, a vol prevista para o prazo) —, com os mesmos números aleatórios, e as
+  faixas dos indicadores mostram o mínimo e o máximo entre eles. As escalas 0,6 e 1,3 são, aproximadamente, os
+  percentis 10 e 90 do erro histórico da previsão de vol em 3 meses (a grade anterior, 0,8–1,2, cobria só 46% dos
+  desfechos).
+- *Vol prevista para o prazo:* média geométrica entre a previsão do GARCH para o prazo,
+  v_L + (h − v_L)·(1 − p^N)/(N·(1 − p)), e a variância realizada dos últimos 252 pregões. Sozinho, o GARCH
+  superestimava a variância do prazo em 15%–25% (67% logo depois de choques extremos); a combinação ficou sem viés.
+  É a vol usada no FHS **e** no modo Teórico (vol única).
+- *Painel de volatilidade:* vol de hoje (previsão para o próximo pregão), vol prevista para o prazo (com as duas
+  parcelas), vol de longo prazo √(ω/(1 − p)), meia-vida ln(0,5)/ln(p) pregões (p = α + γ·κ + β, a persistência;
+  κ = fração média de z² vinda de quedas) e a vol realizada de 63 pregões.
 - *Calibração walk-forward (sob demanda):* a cada 10 pregões, depois de 2 anos de dados, o simulador estima
   P(lucro), P(> CDI) e P(barreira) **só com os dados até aquela data** (GARCH reestimado a cada 252 pregões, CDI da
   data como régua, 1.000 caminhos) e confere o que aconteceu de fato. A régua é o **chute fixo** — a frequência do
   evento nas janelas já encerradas até a data. Métrica: *Brier score*, a média de (probabilidade − resultado 0/1)²;
-  se o Brier do modelo não for menor que o do chute fixo, a probabilidade deve ser lida como ordem de grandeza. O
-  diagrama de confiabilidade agrupa as previsões em faixas de 10 p.p. e compara com a frequência realizada.
+  se o Brier do modelo não for menor que o do chute fixo, a probabilidade deve ser lida como ordem de grandeza. A
+  coluna *t* é a estatística de Diebold-Mariano da diferença de perdas, com erro padrão robusto à sobreposição das
+  janelas: com |t| < 2 a diferença não se distingue de ruído (o caso mais comum numa ação só). O diagrama de
+  confiabilidade agrupa as previsões em faixas de 10 p.p. e compara com a frequência realizada.
 
 **7. Modo ex-post.** Aplica a estrutura no caminho realmente observado entre a contratação e a apuração.
 Se o vencimento ainda não chegou, mostra a marcação **intrínseca** "até hoje", que não é o valor de
@@ -88,7 +100,8 @@ mercado da estrutura.
 
 - *Informado*: o custo cotado pela mesa (0 nas estruturas sem custo, caso da maioria das lâminas).
 - *Teórico*: Black-Scholes-Merton para opções vanilla; Monte Carlo neutro ao risco (GBM, passos
-  diários, antitéticas, seed fixa, 50 mil caminhos ou mais, com erro padrão) para opções com barreira.
+  diários, antitéticas, seed fixa, 50 mil caminhos ou mais, com erro padrão) para opções com barreira. A vol padrão
+  é a vol prevista para o prazo (a mesma do Monte Carlo); se souber a vol implícita da mesa, informe-a.
   A taxa (Selic meta, efetiva ao ano) é convertida para contínua: r = ln(1 + Selic).
 - *Solver de custo zero*: escolhe uma perna e um parâmetro (strike, barreira ou proporção) e encontra,
   por bisseção de Brent, o valor que zera o custo líquido teórico.

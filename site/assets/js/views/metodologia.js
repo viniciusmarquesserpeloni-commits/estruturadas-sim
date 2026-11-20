@@ -49,7 +49,11 @@ só com opções:   retorno = valor final / c − 1   (exige c &gt; 0)</span>
 
         <h3>5. Monte Carlo (complemento)</h3>
         <ul>
-          <li><b>FHS-GARCH</b> (padrão; <i>Filtered Historical Simulation</i>, Barone-Adesi, Giannopoulos &amp; Vosper, 1999): estima-se a vol de
+          <li><b>Média dos 3 métodos</b> (padrão): os três métodos abaixo, com 1/3 dos caminhos cada, juntos — cada probabilidade é a média das
+          três. Cada método tem um ponto fraco (o FHS exagera a vol logo depois de choques, o bootstrap usa a vol média do passado, o GBM supõe
+          retornos normais); nos testes fora da amostra, a combinação foi a única previsão com ganho significativo sobre a frequência histórica
+          na barreira do Collar KI e num evento só de vol. Os indicadores mostram também o menor e o maior valor entre os três ("métodos").</li>
+          <li><b>FHS-GARCH</b> (<i>Filtered Historical Simulation</i>, Barone-Adesi, Giannopoulos &amp; Vosper, 1999): estima-se a vol de
           cada dia do histórico por um <b>GJR-GARCH(1,1)</b> (ou GARCH(1,1)), por máxima verossimilhança gaussiana com <b>alvo de variância</b>
           (a vol de longo prazo fica presa à do próprio histórico; só a dinâmica é estimada); dividindo cada retorno pela vol
           do seu dia, obtêm-se os <b>choques padronizados</b> — os "sustos" reais da ação, sem o nível de vol da época. A simulação parte da
@@ -65,21 +69,26 @@ só com opções:   retorno = valor final / c − 1   (exige c &gt; 0)</span>
           E[S<sub>T</sub>] ≈ (1+μ)^(N/252). A média histórica é pouco confiável: erro padrão ≈ σ/√anos (≈ ±8 p.p. a.a. em BBDC4). No FHS, o
           log-retorno de cada dia é <code>ln(1+μ)/252 − h/2 + √h·z*</code>, com o mesmo E[S<sub>T</sub>].</li>
           <li><b>Sensibilidade às premissas</b>: o erro de sorteio é desprezível; a incerteza que importa é de premissa. Roda-se uma grade de 9
-          cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol {0,8; 1,0; 1,2} × a vol de base (no FHS, a vol média prevista para o
-          prazo) —, com os mesmos números aleatórios; as faixas dos indicadores mostram o mínimo e o máximo entre eles.</li>
+          cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol {0,6; 1,0; 1,3} × a vol de base (no FHS, a vol prevista para o prazo) —,
+          com os mesmos números aleatórios; as faixas dos indicadores mostram o mínimo e o máximo entre eles. As escalas 0,6 e 1,3 são,
+          aproximadamente, os percentis 10 e 90 do erro histórico da previsão de vol em 3 meses.</li>
+          <li><b>Vol prevista para o prazo</b>: média geométrica entre a previsão do GARCH e a variância realizada dos últimos 252 pregões. Sozinho,
+          o GARCH superestimava a variância do prazo em 15%–25% (67% logo depois de choques extremos); a combinação ficou sem viés. É a vol usada
+          no FHS e no modo Teórico (vol única).</li>
         </ul>
         <span class="formula">h(t+1) = ω + (α + γ·1[ε(t) &lt; 0])·ε(t)² + β·h(t)          (GARCH(1,1): γ = 0)
 choque padronizado: z = ε / √h
 persistência p = α + γ·κ + β     vol de longo prazo = √(252·ω/(1 − p))     meia-vida = ln(0,5)/ln(p) pregões
 vol média prevista para N pregões: v_L + (h − v_L)·(1 − p^N)/(N·(1 − p))</span>
-        <p><b>Painel de volatilidade.</b> Mostra a vol de hoje (previsão para o próximo pregão), a vol média prevista para o prazo (a usada no
-        Monte Carlo), a de longo prazo, a meia-vida e a vol realizada de 63 pregões, com o gráfico da vol condicional nos últimos 3 anos.</p>
+        <p><b>Painel de volatilidade.</b> Mostra a vol de hoje (previsão para o próximo pregão), a vol prevista para o prazo (com as parcelas do
+        GARCH e dos 252 pregões), a de longo prazo, a meia-vida e a vol realizada de 63 pregões, com o gráfico da vol condicional nos últimos 3 anos.</p>
         <p><b>Calibração walk-forward (botão "Testar calibração").</b> A cada 10 pregões, depois de 2 anos de dados, o simulador estima P(lucro),
         P(&gt; CDI) e P(barreira) <b>só com os dados até aquela data</b> (GARCH reestimado a cada 252 pregões, CDI da data como régua, 1.000
         caminhos) e confere o que aconteceu de fato. A régua é o <b>chute fixo</b>: a frequência do evento nas janelas já encerradas até a data.
         Métrica: <i>Brier score</i>, a média de (probabilidade − resultado 0/1)²; se o do modelo não for menor que o do chute fixo, leia a
         probabilidade como ordem de grandeza. O diagrama de confiabilidade compara as previsões, agrupadas em faixas de 10 p.p., com a
-        frequência realizada.</p>
+        frequência realizada. A coluna <i>t</i> é a estatística de Diebold-Mariano da diferença de perdas, com erro padrão robusto à sobreposição das janelas: com
+        |t| &lt; 2 a diferença não se distingue de ruído.</p>
 
         <h3>6. Modo ex-post</h3>
         <p>Aplica a estrutura no caminho realmente observado entre a contratação e a apuração. Antes do vencimento, mostra a marcação
@@ -89,7 +98,8 @@ vol média prevista para N pregões: v_L + (h − v_L)·(1 − p^N)/(N·(1 − p
         <ul>
           <li><b>Informado</b>: o custo cotado pela mesa (0 nas estruturas sem custo, caso da maioria das lâminas).</li>
           <li><b>Teórico</b>: Black-Scholes-Merton para opções vanilla; Monte Carlo neutro ao risco (GBM, passos diários, variáveis antitéticas,
-          seed fixa, 50 mil caminhos ou mais, com erro padrão) para opções com barreira. A taxa (Selic meta, efetiva ao ano) vira taxa contínua:
+          seed fixa, 50 mil caminhos ou mais, com erro padrão) para opções com barreira. A vol padrão é a vol prevista para o prazo (a mesma do
+          Monte Carlo); se souber a vol implícita da mesa, informe-a. A taxa (Selic meta, efetiva ao ano) vira taxa contínua:
           <code>r = ln(1 + Selic)</code>. Padrões: vol histórica de 252 pregões e Selic meta do BCB, editáveis em “Mais opções”.</li>
           <li><b>Solver de custo zero</b>: escolhe uma ou mais pernas e um parâmetro (strike, barreira ou proporção) e encontra, pelo método de Brent,
           o valor que zera o custo líquido teórico (ou atinge um custo alvo).</li>

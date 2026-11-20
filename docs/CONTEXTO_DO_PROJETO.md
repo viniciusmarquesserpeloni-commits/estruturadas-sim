@@ -101,7 +101,7 @@
   - `e5e97a6` estrutura inicial · `bae8245` motor de payoff + presets · `27faaee` precificação ·
     `7980c97` dados/backtest/métricas · `8c18b52` fix pandas 3 · `c12226f` app Streamlit · `217b8b7` README ·
     `5c49e4a` motor JS · `218b596` site estático + workflow.
-- **Testes:** 82 pytest + 20 node, todos passando.
+- **Testes:** 84 pytest + 21 node, todos passando.
 - **Deploy:** GitHub Pages ativo com *Source: GitHub Actions*; primeiro deploy (run 39344983819) passou em todas
   as etapas; site conferido no ar (BBDC4/Proteção Total: 3.924 janelas, P(lucro) 100%, P>CDI 35,07%, barreira
   acionada 27,55%, ex-post +23,42% até 19/10/2026).
@@ -148,8 +148,16 @@
     vol (3 ações em 13/11/2026: CPFE3, HAPV3, UGPA3);
   - **IC de Wilson** com amostra efetiva 1,5 × n/N (`wilson_ci`, `effective_sample` / `E.wilsonCi`,
     `E.effectiveSample`), no lugar do block bootstrap; `block_bootstrap_ci` e `E.blockBootstrapCi` foram removidos.
-  - Prioridades 2 e 3 do relatório continuam pendentes (média dos três métodos de MC, grade de vol 0,6/1,0/1,3,
-    significância no painel de calibração…).
+
+- **Correções de prioridade 2 (20/11/2026, aval "Sim, prioridade 2"; README seção 4.22):** Monte Carlo padrão =
+  **média dos 3 métodos** (`method="media"`: FHS, bootstrap e GBM com n/3 caminhos cada, juntos; `parts` e
+  `parts_summary`/`partsSummary` guardam cada método; saída antecipada por método via `run_mc_exit_result` /
+  `E.runMcExitParts`); **vol do prazo = GARCH combinado com 252 pregões** (`blend_scale`/`E.blendScale`, média
+  geométrica das variâncias; desligável com `vol_blend=False`/`volBlend:false`); **vol única** (modo Teórico usa a
+  mesma vol prevista para o prazo, task `volp` no worker / `cached_vol_prazo` no Streamlit); **grade 0,6/1,0/1,3**;
+  **coluna t (Diebold-Mariano HAC)** no painel de calibração. Estado salvo: STATE_VERSION 4 (padrão FHS → média;
+  escolhas explícitas mantidas). Pendente: prioridade 3 do relatório (correção da média dos caminhos FHS, indicador
+  "retorno médio − CDI", comparação lado a lado de estruturas, calibrar a saída com marcações reais, regenerar o guia).
 - **Bug antigo corrigido (desde `218b596`):** todas as páginas do site usam o mesmo `#view`; uma página já visitada
   continuava "viva" e se redesenhava por cima da atual a cada recálculo (e trocar a estrutura fora da aba Estrutura
   dava erro). Agora o roteador guarda `App.route` e cada página só se atualiza se for a rota atual.

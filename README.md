@@ -30,7 +30,8 @@ inicial, tipo de barreira *Knock Up/Down and In/Out* e proporção), e os result
      4.12 Ex-post · 4.13 Métricas · 4.14 Quadro de rentabilidade · 4.15 Precificação teórica ·
      4.16 Solver de custo zero · 4.17 Textos em linguagem simples · 4.18 Saída antecipada ·
      4.19 Incerteza: intervalos de confiança e cenários · 4.20 Volatilidade condicional (FHS-GARCH) e calibração ·
-     4.21 Correções de novembro de 2026 (dados, alvo de variância, IC de Wilson)
+     4.21 Correções de novembro de 2026 (dados, alvo de variância, IC de Wilson) · 4.22 Média dos métodos, vol combinada e
+     significância
 5. [Presets e fórmulas do payoff](#5-presets-e-fórmulas-do-payoff)
 6. [Módulos: Python, JavaScript e demais linguagens](#6-módulos-python-javascript-e-demais-linguagens)
 7. [Bibliotecas e serviços externos](#7-bibliotecas-e-serviços-externos)
@@ -553,7 +554,8 @@ que em simulação cobria só 82%–90%.
 
 **Monte Carlo — grade de cenários.** Com 10.000 caminhos o erro de sorteio é desprezível; a incerteza que
 importa é de **premissa**. Roda-se uma grade de 9 cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol
-{0,8; 1,0; 1,2} × a vol de base —, com 5.000 caminhos cada e os **mesmos números aleatórios**, e mostram-se:
+{0,6; 1,0; 1,3} × a vol de base (antes de 20/11/2026: 0,8/1,0/1,2) —, com 5.000 caminhos cada e os **mesmos
+números aleatórios**, e mostram-se:
 o cenário central (CDI, vol 1,0) em destaque, a faixa mínimo–máximo de cada indicador e três tabelas de
 sensibilidade (P(lucro), P(> CDI de hoje), P(barreira)). A nota da tabela compara a vol de base com a vol
 realizada dos últimos 63 pregões, para mostrar se o momento atual está mais ou menos volátil que a média.
@@ -696,6 +698,40 @@ IC   = [ p + z²/2n_ef ± z·√(p(1−p)/n_ef + z²/4n_ef²) ] / (1 + z²/n_ef)
 Cobertura medida: 94%–97% em 3 e 6 meses, conservadora em 12 meses. É fórmula fechada (sem sorteios), idêntica
 nos dois motores. Ex.: Collar KI 3m em BBDC4 (13/11/2026): P(lucro) 57,5% (IC 47%–67%); P(perda) 0% (IC 0%–4%).
 
+### 4.22 Correções de novembro de 2026 (prioridade 2): média dos métodos, vol combinada e significância
+
+Segunda leva de correções da análise crítica (seção 6 de [docs/ANALISE_CRITICA_2026-11.md](docs/ANALISE_CRITICA_2026-11.md)).
+
+**Média dos 3 métodos como padrão do Monte Carlo** (`method="media"`). FHS-GARCH, bootstrap em blocos e GBM rodam
+com `n/3` caminhos cada e os caminhos ficam juntos: cada probabilidade é a média das três (mistura com pesos
+iguais). Nos testes fora da amostra (26 ações, 9.323 previsões), nenhum método venceu sozinho nos dois eventos
+testados; a média ganhou da frequência histórica nos dois — barreira do Collar KI +3,8% (t = 2,8) e toque em ±12%
++2,5% (t = 2,8). Os indicadores mostram a faixa entre métodos ao lado da faixa de cenários. A saída antecipada
+roda em cada método (1/3 dos caminhos da saída) com a marcação de vol de cada um, e os resultados são juntados.
+Os três métodos continuam disponíveis isoladamente.
+
+**Vol prevista para o prazo = GARCH combinado com 252 pregões** (`garch.blend_scale`, `E.blendScale`):
+
+```
+variância do prazo = √( v_GARCH(N) · v_252 )        v_252 = média dos retornos² dos últimos 252 pregões
+```
+
+No FHS, o fator √(√(v_GARCH·v_252)/v_GARCH) multiplica a vol de cada dia (a dinâmica do GARCH continua). Na
+previsão fora da amostra, o GARCH sozinho superestimava a variância do prazo em 15%–25% (67% logo depois de
+choques > 4σ); combinado, o viés some e a perda QLIKE cai ~30%, sem piorar a calibração (barreira +3,7%).
+
+**Vol única.** A mesma vol prevista para o prazo é a padrão do modo Teórico (antes: vol histórica de 252
+pregões), e a linha de status mostra "Vol. prevista p/ o prazo". Sem histórico suficiente para o GARCH, volta-se à
+vol de 252 pregões. A marcação da saída antecipada continua com a vol GARCH do prazo restante + 3 pontos.
+
+**Grade de vol 0,6× / 1,0× / 1,3×** (antes 0,8/1,0/1,2): ≈ percentis 10 e 90 da razão vol realizada ÷ prevista em
+3 meses (a grade antiga cobria 46% dos desfechos de vol).
+
+**Significância no painel de calibração.** Nova coluna *t*: estatística de Diebold-Mariano da diferença de
+perdas `(chute − y)² − (modelo − y)²`, com variância de longo prazo de Newey-West (Bartlett, defasagens
+`⌈N/passo⌉ + 2`). O veredito passou a ser "melhor/pior com significância estatística" (|t| ≥ 2) ou "não
+distinguível de ruído" — antes, qualquer ganho acima de 2% era apresentado como "o modelo foi melhor".
+
 ## 5. Presets e fórmulas do payoff
 
 Valores em % do valor inicial (S0 = 1). Nos exemplos com ação, custo das opções = 0.
@@ -783,8 +819,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 
 | Arquivo | Linguagem | Função |
 |---|---|---|
-| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py), [`test_garch.py`](tests/test_garch.py), [`test_data_quality.py`](tests/test_data_quality.py) | Python (pytest) | 82 testes do motor Python |
-| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 20 testes do motor JS, incluindo comparação com o Python |
+| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py), [`test_garch.py`](tests/test_garch.py), [`test_data_quality.py`](tests/test_data_quality.py) | Python (pytest) | 84 testes do motor Python |
+| [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 21 testes do motor JS, incluindo comparação com o Python |
 | [`scripts/pesquisa/`](scripts/pesquisa/) | Python | Experimentos da revisão metodológica (walk-forward, regime de juros) — referência, não produção |
 | [`.github/workflows/pages.yml`](.github/workflows/pages.yml) | YAML | Testes + dados + deploy no GitHub Pages |
 | [`.streamlit/config.toml`](.streamlit/config.toml) | TOML | Tema e servidor do Streamlit |
@@ -814,8 +850,8 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 ## 8. Testes e validação cruzada Python × JS
 
 ```bash
-pytest                                   # 82 testes do motor Python
-node --test tests/js/engine.test.mjs     # 20 testes do motor JS
+pytest                                   # 84 testes do motor Python
+node --test tests/js/engine.test.mjs     # 21 testes do motor JS
 python scripts/make_js_fixtures.py       # regenera as referências após mudar o motor Python
 ```
 

@@ -250,7 +250,7 @@ desfechos de vol. Uma grade de **0,6× / 1,0× / 1,3×** (≈ percentis 10 e 90 
    ≥ 0,997 ou a vol de hoje passar de ~4× a amostral, avisar no painel de vol.
 3. **Trocar o IC por Wilson com amostra efetiva de 1,5 × n/N** (Python e JS; remove os 1.000 sorteios).
 
-**Prioridade 2 — tornam os números mais honestos:**
+**Prioridade 2 — tornam os números mais honestos — implementadas em 20/11/2026 (README, seção 4.22):**
 
 4. **Número principal do Monte Carlo = média de FHS, bootstrap e GBM**, com os três como faixa entre métodos.
 5. **Grade de vol 0,6× / 1,0× / 1,3×**, rotulada como "faixa de 80% do erro histórico da previsão de vol".
