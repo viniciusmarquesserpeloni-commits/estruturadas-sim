@@ -9,35 +9,32 @@ import pandas as pd
 from .backtest import BacktestResult
 from .formatting import fmt_num, fmt_pct
 from .legs import Structure, expiry_payoff, returns_from_payoff
-from .rng import Mulberry32
 
 TOL = 1e-9
 TRADING_DAYS = 252
-CI_SEED = 2026  # seed fixa dos intervalos de confiança (mesma do motor JS)
-CI_DRAWS = 1000
+Z95 = 1.959963984540054  # quantil 97,5% da normal
+EFFECTIVE_FACTOR = 1.5  # amostra efetiva das janelas sobrepostas = 1,5 × janelas não sobrepostas
 
 
-def block_bootstrap_ci(indicator, block: int, n_boot: int = CI_DRAWS, seed: int = CI_SEED,
-                       level: float = 0.95) -> tuple[float, float]:
-    """Intervalo de confiança da média de uma série de indicadores (0/1) de janelas sobrepostas, por
-    moving block bootstrap: sorteia blocos consecutivos de ``block`` janelas (padrão = prazo N, o
-    tamanho da sobreposição) até completar a série, ``n_boot`` vezes, e pega os percentis da média.
-    Usa o gerador mulberry32 (idêntico ao do JS) para dar o mesmo intervalo nos dois motores."""
-    x = np.asarray(indicator, dtype=float)
-    n = len(x)
-    if n == 0:
+def effective_sample(n: int, n_days: int) -> float:
+    """Amostra efetiva de ``n`` janelas sobrepostas de ``n_days`` pregões para o intervalo de confiança:
+    1,5 × n/N. Janelas vizinhas compartilham quase todos os dias; n/N são as janelas não sobrepostas, e as
+    sobrepostas acrescentam alguma informação. O fator 1,5 foi calibrado por simulação (processo GARCH
+    conhecido, prazos de 3, 6 e 12 meses): com ele o intervalo de Wilson cobre 94%–97% (ver
+    docs/ANALISE_CRITICA_2026-11.md); o block bootstrap usado antes cobria 82%–90%."""
+    return max(1.0, EFFECTIVE_FACTOR * n / max(1, n_days))
+
+
+def wilson_ci(p: float, n_eff: float, z: float = Z95) -> tuple[float, float]:
+    """Intervalo de Wilson para uma proporção ``p`` medida em ``n_eff`` observações independentes. Ao
+    contrário do intervalo normal, nunca sai de [0, 1] e não degenera quando p = 0 ou 1 (com p = 0, o
+    limite superior é z²/(n + z²): "nunca aconteceu" não vira "0–0%")."""
+    if not (n_eff > 0) or p != p:
         return float("nan"), float("nan")
-    block = int(min(max(1, block), n))
-    m, nb = n - block + 1, int(math.ceil(n / block))
-    csum = np.concatenate([[0.0], np.cumsum(x)])
-    rng = Mulberry32(seed)
-    starts = np.array([rng.int(m) for _ in range(n_boot * nb)], dtype=np.int64).reshape(n_boot, nb)
-    lengths = np.full(nb, block, dtype=np.int64)
-    lengths[-1] = n - block * (nb - 1)
-    means = (csum[starts + lengths] - csum[starts]).sum(axis=1) / n
-    a = (1 - level) / 2 * 100
-    lo, hi = np.percentile(means, [a, 100 - a])
-    return float(lo), float(hi)
+    den = 1.0 + z * z / n_eff
+    center = (p + z * z / (2.0 * n_eff)) / den
+    half = z * math.sqrt(p * (1.0 - p) / n_eff + z * z / (4.0 * n_eff * n_eff)) / den
+    return max(0.0, center - half), min(1.0, center + half)
 
 
 def cvar(r, q: float = 0.05) -> float:
@@ -104,7 +101,9 @@ def summarize(res: BacktestResult) -> dict:
             inds["p_cdi"] = r > ref.to_numpy(dtype=float) + TOL
         if res.event_cols:
             inds["p_barreira"] = hit
-        out["ci"] = {k: block_bootstrap_ci(v, res.n_days) for k, v in inds.items()}
+        n_eff = effective_sample(len(r), res.n_days)
+        out["ci"] = {k: wilson_ci(float(np.mean(v)), n_eff) for k, v in inds.items()}
+        out["n_ef_ic"] = n_eff
     return out
 
 
@@ -228,7 +227,7 @@ def summarize_exit(res) -> dict:
     with np.errstate(divide="ignore", invalid="ignore"):
         pct_cdi = np.where(cdi > 0, r / cdi, np.nan)
     q = np.percentile(exit_days, [25, 50, 75]) if early.any() else [np.nan] * 3
-    ci = {"p_saida": block_bootstrap_ci(early.astype(float), N)} if "cdi_inicio" in df else {}
+    ci = {"p_saida": wilson_ci(float(early.mean()), effective_sample(len(df), N))} if "cdi_inicio" in df else {}
     return {
         "ci": ci, "cvar5": cvar(r, 0.05),
         "n": len(r),

@@ -296,25 +296,17 @@
   const frac = (a, fn) => { let k = 0; for (let i = 0; i < a.length; i++) if (fn(a[i], i)) k++; return k / a.length; };
   E.annualize = (r, N) => (r == null || !isFinite(r) || r <= -1 ? NaN : Math.pow(1 + r, TD / N) - 1);
 
-  E.CI_SEED = 2026; E.CI_DRAWS = 1000;
-  /* IC da média de indicadores (0/1) de janelas sobrepostas por moving block bootstrap (bloco = prazo N);
-     mesmo gerador e mesma ordem de sorteios do Python, para dar o mesmo intervalo nos dois motores. */
-  E.blockBootstrapCi = function (ind, block, B = E.CI_DRAWS, seed = E.CI_SEED, level = 0.95) {
-    const n = ind.length;
-    if (!n) return [NaN, NaN];
-    block = Math.min(Math.max(1, block), n);
-    const m = n - block + 1, nb = Math.ceil(n / block), last = n - block * (nb - 1);
-    const csum = new Float64Array(n + 1);
-    for (let i = 0; i < n; i++) csum[i + 1] = csum[i] + ind[i];
-    const rng = E.rng(seed), means = new Float64Array(B);
-    for (let b = 0; b < B; b++) {
-      let tot = 0;
-      for (let j = 0; j < nb; j++) { const st = rng.int(m), len = j < nb - 1 ? block : last; tot += csum[st + len] - csum[st]; }
-      means[b] = tot / n;
-    }
-    means.sort();
-    const a = (1 - level) / 2 * 100;
-    return [pctile(means, a), pctile(means, 100 - a)];
+  E.Z95 = 1.959963984540054; E.EFFECTIVE_FACTOR = 1.5;
+  /* Amostra efetiva de n janelas sobrepostas de N pregões para o IC: 1,5 × janelas não sobrepostas (fator
+     calibrado por simulação: o intervalo de Wilson cobre 94%–97%; o block bootstrap anterior cobria 82%–90%). */
+  E.effectiveSample = (n, N) => Math.max(1, E.EFFECTIVE_FACTOR * n / Math.max(1, N));
+  /* Intervalo de Wilson para uma proporção p em nEff observações independentes: fica em [0, 1] e não degenera
+     quando p = 0 ou 1 (com p = 0, o limite superior é z²/(n + z²)). */
+  E.wilsonCi = function (p, nEff, z = E.Z95) {
+    if (!(nEff > 0) || p !== p) return [NaN, NaN];
+    const den = 1 + z * z / nEff, center = (p + z * z / (2 * nEff)) / den;
+    const half = z * Math.sqrt(p * (1 - p) / nEff + z * z / (4 * nEff * nEff)) / den;
+    return [Math.max(0, center - half), Math.min(1, center + half)];
   };
   /* CVaR (expected shortfall): média dos q piores resultados (pelo menos um). */
   E.cvar = function (r, q = 0.05) { const s = sorted(r), k = Math.max(1, Math.ceil(q * s.length)); let m = 0; for (let i = 0; i < k; i++) m += s[i]; return m / k; };
@@ -348,11 +340,12 @@
     } else out.p_cdi_epoca = out.cdi_medio = out.cdi_medio_anual = NaN;
     out.ci = {};
     if (res.kind === "historico") {
-      const ind = (fn) => { const a = new Float64Array(r.length); for (let i = 0; i < r.length; i++) a[i] = fn(r[i], i) ? 1 : 0; return a; };
-      out.ci.p_lucro = E.blockBootstrapCi(ind((v) => v > TOL), res.N);
-      out.ci.p_perda = E.blockBootstrapCi(ind((v) => v < -TOL), res.N);
-      if (hoje || res.cdi) out.ci.p_cdi = E.blockBootstrapCi(ind((v, i) => v > ref(i) + TOL), res.N);
-      if (res.events.length) out.ci.p_barreira = E.blockBootstrapCi(Float64Array.from(res.anyHit), res.N);
+      const nEff = E.effectiveSample(r.length, res.N), ci = (p) => E.wilsonCi(p, nEff);
+      out.n_ef_ic = nEff;
+      out.ci.p_lucro = ci(out.p_lucro);
+      out.ci.p_perda = ci(out.p_perda);
+      if (hoje || res.cdi) out.ci.p_cdi = ci(out.p_cdi);
+      if (res.events.length) out.ci.p_barreira = ci(out.p_barreira);
     }
     return out;
   };

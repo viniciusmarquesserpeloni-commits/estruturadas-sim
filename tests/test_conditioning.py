@@ -9,7 +9,7 @@ from estruturadas.backtest import (bootstrap_drift_daily, bootstrap_ohlc_paths, 
                                    regime_factor, run_historical, run_monte_carlo, run_scenarios)
 from estruturadas.data import latest_cdi_annual
 from estruturadas.early_exit import EarlyExitConfig, run_historical_exit
-from estruturadas.metrics import block_bootstrap_ci, cvar, summarize, summarize_exit
+from estruturadas.metrics import cvar, effective_sample, summarize, summarize_exit, wilson_ci
 from estruturadas.rng import Mulberry32
 
 
@@ -51,15 +51,21 @@ def test_fixed_floor_structure_loses_against_todays_cdi():
     assert sm["cdi_hoje"] == pytest.approx(1.14 ** (249 / 252) - 1)
 
 
-def test_block_bootstrap_ci_properties():
-    rng = np.random.default_rng(1)
-    x = (np.cumsum(rng.normal(size=2000)) > 0).astype(float)  # indicador muito autocorrelacionado
-    lo, hi = block_bootstrap_ci(x, 63)
-    assert lo <= x.mean() <= hi
-    assert block_bootstrap_ci(x, 63) == (lo, hi)  # determinístico (seed fixa)
-    lo1, hi1 = block_bootstrap_ci(x, 1)
-    assert (hi1 - lo1) < (hi - lo)  # ignorar a sobreposição subestima a incerteza
-    assert block_bootstrap_ci(np.ones(500), 20) == (1.0, 1.0)
+def test_wilson_ci_properties():
+    lo, hi = wilson_ci(0.578, 99.0)
+    assert lo < 0.578 < hi and (hi - lo) == pytest.approx(0.191, abs=0.005)
+    # p = 0 ou 1 não degenera: "nunca aconteceu" tem limite superior z²/(n + z²)
+    lo0, hi0 = wilson_ci(0.0, 99.0)
+    assert lo0 == 0.0 and hi0 == pytest.approx(1.96 ** 2 / (99 + 1.96 ** 2), rel=1e-3)
+    lo1, hi1 = wilson_ci(1.0, 99.0)
+    assert hi1 == 1.0 and lo1 == pytest.approx(1 - hi0)
+    # mais amostra efetiva = intervalo mais estreito; simétrico em p e 1 − p
+    assert (wilson_ci(0.4, 400)[1] - wilson_ci(0.4, 400)[0]) < (wilson_ci(0.4, 50)[1] - wilson_ci(0.4, 50)[0])
+    a, b = wilson_ci(0.3, 80), wilson_ci(0.7, 80)
+    assert a[0] == pytest.approx(1 - b[1]) and a[1] == pytest.approx(1 - b[0])
+    # amostra efetiva: 1,5 × janelas não sobrepostas
+    assert effective_sample(4117, 63) == pytest.approx(1.5 * 4117 / 63)
+    assert effective_sample(10, 252) == 1.0
 
 
 def test_mulberry32_range_and_determinism():

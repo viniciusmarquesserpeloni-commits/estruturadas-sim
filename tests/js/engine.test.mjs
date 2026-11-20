@@ -198,13 +198,13 @@ test("saída antecipada: regras (delay, carência, vencimento) e Monte Carlo", (
 });
 
 /* ---------------- Fase 1 da revisão metodológica ---------------- */
-test("fase 1: gerador mulberry32, IC por block bootstrap e CVaR iguais ao Python", () => {
+test("fase 1: gerador mulberry32, IC de Wilson e CVaR iguais ao Python", () => {
   const F1 = FX.fase1;
   const g = E.rng(2026);
   closeArr(F1.rng.map(() => g.uni()), F1.rng, 1e-15, "mulberry32");
   const g2 = E.rng(77);
   assert.deepEqual(F1.rng_int.map(() => g2.int(13)), F1.rng_int);
-  for (const c of F1.ci) closeArr(E.blockBootstrapCi(Float64Array.from(c.ind), c.block), c.ci, 1e-12, `IC bloco ${c.block}`);
+  for (const [p, n, lo, hi] of F1.ci) closeArr(E.wilsonCi(p, n), [lo, hi], 1e-14, `IC de Wilson p=${p} n=${n}`);
   for (const [r, q, v] of F1.cvar) close(E.cvar(r, q), v, 1e-12, "CVaR");
 });
 

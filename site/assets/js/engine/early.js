@@ -222,7 +222,7 @@
       if (r[i] > TOL) lucro++; if (r[i] < -TOL) perda++; if (r[i] > x.cdiPeriod[i] + TOL) cdi++;
     }
     return {
-      ci: x.kind === "historico" ? { p_saida: E.blockBootstrapCi(Float64Array.from(x.early), x.N) } : {}, cvar5: E.cvar(r, 0.05),
+      ci: x.kind === "historico" ? { p_saida: E.wilsonCi(early / n, E.effectiveSample(n, x.N)) } : {}, cvar5: E.cvar(r, 0.05),
       n, p_gatilho: trig / n, p_saida: early / n,
       dias_p25: ex.length ? pct(ex, 25) : NaN, dias_mediana: ex.length ? pct(ex, 50) : NaN, dias_p75: ex.length ? pct(ex, 75) : NaN,
       ret_saida_media: early ? exitRet / early : NaN, media: mean(r), mediana: pct(rs, 50), media_venc: mean(Array.from(x.retHold)),

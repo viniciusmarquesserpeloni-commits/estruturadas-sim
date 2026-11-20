@@ -175,16 +175,14 @@ def main() -> None:
                                        "exit": x.exit_date.strftime("%Y-%m-%d") if x.exit_date is not None else None,
                                        "exit_return": x.exit_return})
 
-    # Fase 1 da revisão: gerador compartilhado, IC por block bootstrap, ajuste de regime, CVaR
-    from estruturadas.metrics import block_bootstrap_ci, cvar, summarize_exit
+    # Fase 1 da revisão: gerador compartilhado, IC de Wilson, ajuste de regime, CVaR
+    from estruturadas.metrics import cvar, summarize_exit, wilson_ci
     from estruturadas.rng import Mulberry32
     g = Mulberry32(2026)
-    rr = np.random.default_rng(9)
-    ind = (np.cumsum(rr.normal(size=700)) > 0).astype(float)
     out["fase1"] = {
         "rng": [g.uni() for _ in range(25)],
         "rng_int": (lambda m: [m.int(13) for _ in range(20)])(Mulberry32(77)),
-        "ci": [{"ind": ind, "block": b, "ci": block_bootstrap_ci(ind, b)} for b in (1, 21, 63, 700)],
+        "ci": [[p_, n_, *wilson_ci(p_, n_)] for p_, n_ in ((0.0, 99.0), (1.0, 16.5), (0.578, 98.02), (0.09, 48.4), (0.5, 1.0))],
         "cvar": [[[0.03, -0.2, 0.1, -0.05, 0.0, 0.07, -0.01], 0.05, cvar([0.03, -0.2, 0.1, -0.05, 0.0, 0.07, -0.01], 0.05)],
                  [[1, 2, 3, 4], 0.5, cvar([1, 2, 3, 4], 0.5)]],
         "regime": [], "saida_regime": [],
