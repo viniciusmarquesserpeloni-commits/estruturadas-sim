@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from estruturadas import charts, data
+from estruturadas import compare as cmp
 from estruturadas import io as sio
 from estruturadas import presets
 from estruturadas.backtest import (DRIFT_LABELS, MC_METHOD_LABELS, SCENARIO_DRIFTS, SCENARIO_VOLS, ohlc_log_returns,
@@ -428,10 +429,22 @@ st.caption("Probabilidade de sair no lucro em estruturas com opções sobre aç�
 if price_error:
     st.error(f"Não foi possível carregar os preços: {price_error}")
 
-tab_struct, tab_hist, tab_mc, tab_ex, tab_method = st.tabs(
-    ["Estrutura", "Backtest histórico", "Monte Carlo", "Ex-post", "Metodologia e limitações"])
+tab_struct, tab_hist, tab_mc, tab_ex, tab_cmp, tab_method = st.tabs(
+    ["Estrutura", "Backtest histórico", "Monte Carlo", "Ex-post", "Comparar", "Metodologia e limitações"])
 
 base: Structure = st.session_state.base_structure
+
+
+def _add_compare(name: str, s_json: str, c: float) -> str:
+    """Adiciona uma estrutura (com o custo que ela usa) à comparação; devolve a mensagem para o usuário."""
+    lst = st.session_state.setdefault("compare", [])
+    if len(lst) >= cmp.MAX_ITEMS:
+        return f"A comparação já tem {cmp.MAX_ITEMS} estruturas: remova uma antes."
+    if has_errors(validate(sio.loads(s_json), c)):
+        return "A estrutura tem erros com esse custo: corrija antes de comparar."
+    name = cmp.unique_name(name, [x["name"] for x in lst])
+    lst.append({"name": name, "struct_json": s_json, "cost": float(c)})
+    return f"“{name}” adicionada à comparação ({len(lst)} de {cmp.MAX_ITEMS})."
 
 # ----------------------------- Aba Estrutura -------------------------------
 with tab_struct:
@@ -581,8 +594,13 @@ with tab_struct:
                     else:
                         st.warning(res.message)
 
-        st.download_button("⬇️ Baixar estrutura (JSON)", struct_json.encode("utf-8"),
-                           file_name=f"{structure.name.lower().replace(' ', '_')}.json", mime="application/json")
+        bc = st.columns(2)
+        bc[0].download_button("⬇️ Baixar estrutura (JSON)", struct_json.encode("utf-8"),
+                              file_name=f"{structure.name.lower().replace(' ', '_')}.json", mime="application/json")
+        if bc[1].button("➕ Adicionar à comparação", help="Guarda esta estrutura, com o custo usado agora, para "
+                                                         "comparar lado a lado na aba Comparar."):
+            st.toast(_add_compare(structure.name + (" (custo teórico)" if cost_mode == "Teórico" else ""),
+                                  struct_json, cost))
 
 # ----------------------------- Backtests -----------------------------------
 hist_res = mc_res = hexit_res = mcexit_res = scen_res = None
@@ -950,6 +968,59 @@ with tab_ex:
                     st.plotly_chart(charts.ex_post_exit_chart(xx, exit_cfg["trigger"]))
                     st.caption("Marcação a modelo (Black-Scholes e fórmulas de barreira): estimativa do valor de "
                                "desmontagem; o preço efetivo é o da mesa.")
+
+# ----------------------------- Aba Comparar --------------------------------
+with tab_cmp:
+    st.markdown(f"Até {cmp.MAX_ITEMS} estruturas lado a lado, com a mesma ação, prazo e premissas da barra lateral; "
+                "cada uma com o seu custo. É o melhor uso das probabilidades: comparar estruturas e dimensionar "
+                "barreiras.")
+    fc = st.columns([3, 2, 2])
+    cmp_preset = fc[0].selectbox("Adicionar um preset", list(presets.PRESETS),
+                                 format_func=lambda k: presets.PRESETS[k].name, key="cmp_preset")
+    cmp_cost = fc[1].number_input("Custo das opções (% do valor inicial)", value=0.0, step=0.1, format="%.2f",
+                                  key="cmp_cost")
+    fc[2].write("")
+    if fc[2].button("Adicionar preset"):
+        s_new = presets.PRESETS[cmp_preset].builder()
+        st.toast(_add_compare(s_new.name, sio.dumps(s_new), cmp_cost / 100))
+    cmp_list = st.session_state.get("compare", [])
+    if not cmp_list:
+        st.info("Nenhuma estrutura na comparação ainda. Monte uma estrutura na aba **Estrutura** e clique em "
+                "**Adicionar à comparação**, ou adicione um preset acima.")
+    elif prices is None:
+        st.info("Carregue os preços da ação (barra lateral) para comparar.")
+    else:
+        rc = st.columns(len(cmp_list))
+        for i, it in enumerate(list(cmp_list)):
+            if rc[i].button(f"✕ Remover “{it['name']}”", key=f"cmp_rm_{i}_{it['name']}"):
+                cmp_list.pop(i)
+                st.rerun()
+        items = []
+        try:
+            with st.spinner("Rodando histórico e Monte Carlo de cada estrutura…"):
+                cdi_c = cached_cdi(prices.index[0].date(), prices.index[-1].date())
+                cdi_f = data.cdi_factor_on_index(prices.index, cdi_c, rate_annual)
+                for it in cmp_list:
+                    s_it = sio.loads(it["struct_json"])
+                    h = None
+                    if n_days < len(prices):
+                        h = summarize(cached_historical(it["struct_json"], prices, n_days, it["cost"], monitoring,
+                                                        extra_cost, cdi_f, rate_annual,
+                                                        regime_adjust and cdi_c is not None))
+                    m = summarize(cached_mc(it["struct_json"], prices, n_days, it["cost"], mc_method, 6000,
+                                            int(mc_block), mc_drift, rate_annual, int(mc_seed), monitoring,
+                                            extra_cost, mc_premium, mc_custom, vol_model))
+                    items.append(cmp.CompareItem(it["name"], s_it, it["cost"], h, m))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Erro ao comparar: {exc}")
+        if items:
+            st.dataframe(cmp.compare_table(items, extra_cost), hide_index=True)
+            st.caption(f"{ticker} · {n_days} pregões · Monte Carlo: {MC_METHOD_LABELS[mc_method]}, 6.000 caminhos por "
+                       "estrutura. ★ = melhor valor da linha (P(barreira) não é marcada: tocar a barreira é bom em "
+                       "umas estruturas e ruim em outras). Quando os intervalos de confiança se sobrepõem, a "
+                       "diferença pode ser só ruído da amostra. “Retorno médio − CDI” no Monte Carlo com retorno "
+                       "esperado = CDI mede o custo embutido de cada estrutura.")
+            st.plotly_chart(charts.payoff_compare_chart([(x.name, x.structure, x.cost) for x in items], extra_cost))
 
 with tab_method:
     st.markdown(METODOLOGIA)

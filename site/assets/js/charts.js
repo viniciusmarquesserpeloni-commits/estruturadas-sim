@@ -68,6 +68,38 @@
     });
   };
 
+  /* 1b. Comparação: retorno no vencimento de várias estruturas (uma cor por estrutura; tracejado = barreira tocada). */
+  C.COMPARE_COLORS = [BLUE, ORANGE, AQUA, "#8a5cd1"];
+  C.payoffCompare = function (el, items, extra) {
+    const levels = [1];
+    items.forEach((it) => levels.push(...E.strikes(it.s), ...E.events(it.s).map((e) => e.level)));
+    const hi = Math.max(1.5, Math.max(...levels) + 0.25), lo = Math.max(0, Math.min(0.5, Math.min(...levels) - 0.25));
+    const xs = [];
+    for (let i = 0; i <= 600; i++) xs.push(lo + ((hi - lo) * i) / 600);
+    levels.forEach((l) => { xs.push(l); xs.push(l - 1e-6); });
+    xs.sort((a, b) => a - b);
+    const series = [{ name: "Só a ação", type: "line", showSymbol: false, data: xs.map((x) => [x - 1, x - 1]), lineStyle: { color: GRAY, width: 1.5, type: "dotted" }, itemStyle: { color: GRAY }, z: 1 }];
+    const dashed = new Set(["Só a ação"]);
+    items.forEach((it, k) => {
+      const color = C.COMPARE_COLORS[k % C.COMPARE_COLORS.length], hasEv = E.events(it.s).length > 0;
+      (hasEv ? [["none", ""], ["all", " (barreira tocada)"]] : [["none", ""]]).forEach(([b, suf]) => {
+        const p = E.expiryPayoff(it.s, xs, b), name = `${k + 1}. ${it.name}${suf}`;
+        if (b === "all") dashed.add(name);
+        series.push({ name, type: "line", showSymbol: false, connectNulls: false, lineStyle: { color, width: 2.2, type: b === "all" ? "dashed" : "solid" }, itemStyle: { color }, z: 3 + k,
+          data: xs.map((x, i) => { if (!isFinite(p[i])) return [x - 1, null]; try { return [x - 1, E.returnsFromPayoff(p[i], it.cost, E.hasStock(it.s), extra)]; } catch (e) { return [x - 1, null]; } }) });
+      });
+    });
+    return C.mount(el, {
+      grid: { left: 8, right: 16, top: 56, bottom: 28, containLabel: true },
+      legend: Object.assign({}, legend, { type: "scroll" }),
+      tooltip: Object.assign({}, tooltipBase, { trigger: "axis", axisPointer: { type: "line", lineStyle: { color: AXIS } },
+        formatter: (ps) => `<div class="tt"><div class="tt-h">Ação ${F.pct(ps[0].data[0], 1)}</div>${ps.filter((p) => p.data[1] != null).map((p) => row(p.seriesName, F.pct(p.data[1]), p.color, dashed.has(p.seriesName))).join("")}</div>` }),
+      xAxis: Object.assign({ type: "value", min: lo - 1, max: hi - 1, name: "Variação da ação no vencimento", nameLocation: "middle", nameGap: 26, nameTextStyle: { color: TEXT2, fontSize: 11.5 } }, axis, { axisLabel: { color: MUTED, fontSize: 11, formatter: (v) => pct(v) }, splitLine: { show: false } }),
+      yAxis: Object.assign({ type: "value", scale: true }, axis, { axisLabel: { color: MUTED, fontSize: 11, formatter: (v) => pct(v) } }),
+      series,
+    });
+  };
+
   /* 2. Histograma de retornos (frequência relativa), com linhas em 0% e no CDI. */
   C.histogram = function (el, sets, cdi) {
     const all = [];

@@ -271,6 +271,10 @@
     ctx.cdiNow = App.cdiAtual();
     ctx.rateAnnual = st.adv.rate ?? ctx.cdiNow ?? (selic != null ? selic - 0.001 : 0.10);
     ctx.r = E.annualToContinuous(ctx.rateAnnual);
+    // fator do CDI e ajuste de regime: calculados antes da validação para a página Comparar funcionar mesmo
+    // com a estrutura atual em edição
+    ctx.regimeAdjust = !!(st.adv.regimeAdjust && App.data.cdi && App.data.cdi.d.length);
+    ctx.cdiF = ctx.P ? E.cdiFactor(ctx.P.d, App.data.cdi && App.data.cdi.d.length ? App.data.cdi : null, ctx.rateAnnual) : null;
     const s = st.structure, extra = st.adv.extra || 0;
     ctx.extra = extra;
     const informed = st.costMode === "informado";
@@ -294,8 +298,6 @@
 
     // Backtests
     const key = JSON.stringify([s.legs, ctx.cost, ctx.ticker, st.adv.adjusted, st.adv.start, ctx.n, st.adv.monitoring, extra, ctx.rateAnnual, st.adv.regimeAdjust, App.csv ? App.csv.d.length : 0]);
-    ctx.regimeAdjust = !!(st.adv.regimeAdjust && App.data.cdi && App.data.cdi.d.length);
-    ctx.cdiF = E.cdiFactor(ctx.P.d, App.data.cdi && App.data.cdi.d.length ? App.data.cdi : null, ctx.rateAnnual);
     ctx.histPending = true; push();
     try {
       if (ctx.n >= ctx.P.c.length) throw new Error(`Histórico insuficiente (${ctx.P.c.length} pregões) para janelas de ${ctx.n} pregões.`);

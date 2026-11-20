@@ -65,6 +65,42 @@ def payoff_chart(structure: Structure, cost: float, extra_cost: float = 0.0) -> 
     return fig
 
 
+COMPARE_COLORS = [BLUE, ORANGE, AQUA, "#8a5cd1"]
+
+
+def payoff_compare_chart(items: list[tuple[str, Structure, float]], extra_cost: float = 0.0) -> go.Figure:
+    """Retorno no vencimento de várias estruturas: uma cor por estrutura, tracejado = barreira tocada."""
+    levels = [1.0]
+    for _, s_, _ in items:
+        levels += s_.strikes + [e[1] for e in s_.events]
+    hi = max(1.5, max(levels) + 0.25)
+    lo = max(0.0, min(0.5, min(levels) - 0.25))
+    s = np.unique(np.concatenate([np.linspace(lo, hi, 801), np.array(levels), np.array(levels) - 1e-6]))
+    x = s - 1
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=x, name="Só a ação", line=dict(color=GRAY, width=1.5, dash="dot"),
+                             hovertemplate="%{y:.2%}"))
+    for k, (name, structure, cost) in enumerate(items):
+        color = COMPARE_COLORS[k % len(COMPARE_COLORS)]
+        branches = [("none", ""), ("all", " (barreira tocada)")] if structure.events else [("none", "")]
+        for b, suf in branches:
+            p = expiry_payoff(structure, s, b)
+            try:
+                r = np.where(np.isfinite(p), returns_from_payoff(np.nan_to_num(p), cost, structure.has_stock,
+                                                                 extra_cost), np.nan)
+            except ValueError:
+                continue
+            fig.add_trace(go.Scatter(x=x, y=r, name=f"{k + 1}. {name}{suf}", hovertemplate="%{y:.2%}",
+                                     line=dict(color=color, width=2.2, dash="dash" if b == "all" else "solid"),
+                                     connectgaps=False))
+    fig.add_hline(y=0, line=dict(color=GRAY, width=1))
+    _layout(fig, "Retorno no vencimento × variação da ação", "Variação da ação no vencimento",
+            "Retorno da estrutura")
+    fig.update_xaxes(tickformat=".0%")
+    fig.update_yaxes(tickformat=".0%")
+    return fig
+
+
 def histogram_chart(results: dict[str, BacktestResult], cdi: float | None = None) -> go.Figure:
     """Histograma dos retornos (frequência relativa), sobrepostos."""
     colors = [BLUE, ORANGE, AQUA]

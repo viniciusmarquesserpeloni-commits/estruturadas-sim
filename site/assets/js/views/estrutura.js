@@ -12,6 +12,7 @@
       <div class="page-head">
         <div><h2 id="s-name"></h2><p id="s-notes"></p></div>
         <div class="toolbar no-print">
+          <button class="btn" type="button" id="s-compare" title="Guardar esta estrutura, com o custo usado agora, para comparar lado a lado na aba Comparar">Adicionar à comparação</button>
           <button class="btn" type="button" id="s-export" title="Salvar a estrutura (lâmina) em JSON para importar depois">Exportar JSON</button>
         </div>
       </div>
@@ -37,6 +38,11 @@
       </div>
       <div class="card" style="margin-top:16px"><div class="card-h"><h3>Solver de custo zero</h3><span class="sub">encontra o parâmetro que zera o custo líquido teórico (ou atinge um custo alvo)</span></div>
         <div class="card-b" id="s-solver"></div></div>`;
+    el.querySelector("#s-compare").addEventListener("click", () => {
+      const s = App.state.structure, ctx = App.ctx;
+      if (ctx.theoPending && App.state.costMode === "teorico") { App.toast("Aguarde o cálculo do custo teórico."); return; }
+      App.toast(App.addToCompare(s, ctx.cost, s.name + (App.state.costMode === "teorico" ? " (custo teórico)" : "")));
+    });
     el.querySelector("#s-export").addEventListener("click", () => {
       const s = App.state.structure;
       App.download(`${s.name.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_")}.json`, JSON.stringify(E.toJSON(s), null, 2), "application/json");

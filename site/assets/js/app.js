@@ -22,7 +22,7 @@
       <div style="margin-top:6px">Sem recomendação de investimento. Rentabilidade passada não representa garantia de rentabilidade futura. Retornos simulados brutos de IR; não consideram risco de contraparte, liquidez nem resgate antecipado. Leia a lâmina da operação antes de investir.</div>`;
   }
 
-  const routes = { estrutura: V.estrutura, backtest: V.backtest, "monte-carlo": V["monte-carlo"], "ex-post": V["ex-post"], metodologia: V.metodologia };
+  const routes = { estrutura: V.estrutura, backtest: V.backtest, "monte-carlo": V["monte-carlo"], "ex-post": V["ex-post"], comparar: V.comparar, metodologia: V.metodologia };
   function go() {
     const name = (location.hash.replace(/^#\/?/, "").split("/")[0]) || "estrutura";
     const route = routes[name] ? name : "estrutura";
