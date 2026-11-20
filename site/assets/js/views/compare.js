@@ -102,7 +102,7 @@
       ["Retorno mediano", "h", "mediana", true, 2],
       ["Retorno médio − CDI de hoje", "h", "excesso_cdi", true, 2],
       ["CVaR 5% (média dos 5% piores)", "h", "cvar5", true, 2],
-      ["section", `Monte Carlo (${esc(E.MC_METHOD_LABELS[App.state.adv.mcMethod] || "")})`],
+      ["section", `Monte Carlo — ${esc((E.MC_METHOD_LABELS[App.state.adv.mcMethod] || "").replace(/ \(recomendado\)$/, ""))}`],
       ["P(lucro > 0)", "m", "p_lucro", true],
       ["P(retorno > CDI de hoje)", "m", "p_cdi", true],
       ["P(barreira acionada)", "m", "p_barreira", null],

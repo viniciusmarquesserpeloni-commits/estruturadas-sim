@@ -70,6 +70,9 @@ qualquer do passado".
   lr* = (lr − média) + [ln(1 + μ) − σ²/2]/252, de modo que E[S_T] ≈ (1 + μ)^(N/252). A média histórica é pouco
   confiável: seu erro padrão é ≈ σ/√anos (≈ ±8 p.p. a.a. em BBDC4), maior que o próprio prêmio de risco. No FHS,
   o log-retorno de cada dia é ln(1 + μ)/252 − h/2 + √h·z*, o que dá o mesmo E[S_T].
+- *Correção martingal* (Duan & Simonato, 1998): no FHS e no bootstrap, cada dia j dos caminhos é multiplicado por
+  (1 + μ)^(j/252) ÷ média dos caminhos naquele dia — a média simulada cresce exatamente ao retorno esperado,
+  sem o viés de sorteio nem o da vol variável do GARCH.
 - *Sensibilidade às premissas:* com milhares de caminhos o erro de sorteio é desprezível; a incerteza que importa
   é de premissa. Por isso roda-se uma grade de 9 cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol
   {0,6; 1,0; 1,3} × a vol de base (no FHS, a vol prevista para o prazo) —, com os mesmos números aleatórios, e as
@@ -144,6 +147,11 @@ alguns pregões depois (padrão: 1), pelo valor daquele dia. Sem gatilho, a oper
   hoje é desligado (o app avisa).
 - CDI de referência: CDI efetivo do último dia, (1 + CDI diário)^252 − 1, editável.
 - CVaR 5%: média dos 5% piores resultados, ao lado do percentil 5.
+- Retorno médio − CDI de hoje (no prazo): quanto a estrutura rende, em média, acima ou abaixo do CDI. No Monte
+  Carlo com retorno esperado = CDI, mede o custo embutido da estrutura.
+- Comparação de estruturas (aba Comparar): até 4 estruturas, cada uma com o seu custo, na mesma ação, prazo e
+  premissas; o melhor valor de cada linha é destacado (menos P(barreira)). Com ICs sobrepostos, a diferença
+  pode ser ruído.
 - Qualidade dos dados: a base é filtrada a cada atualização. Salto isolado de preço com razão de desdobramento
   (2, 3, 4, 5 ou 10:1) é corrigido reescalando o histórico anterior; outras variações extremas de um dia (queda acima
   de 30% ou alta acima de 42%), fora de dias de movimento geral do mercado, são sinalizadas; e o trecho inicial em

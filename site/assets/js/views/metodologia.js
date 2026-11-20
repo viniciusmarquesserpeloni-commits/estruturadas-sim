@@ -68,6 +68,9 @@ só com opções:   retorno = valor final / c − 1   (exige c &gt; 0)</span>
           No bootstrap, troca-se a média dos log-retornos pelo drift escolhido: <code>lr* = (lr − média) + [ln(1+μ) − σ²/2]/252</code>, de modo que
           E[S<sub>T</sub>] ≈ (1+μ)^(N/252). A média histórica é pouco confiável: erro padrão ≈ σ/√anos (≈ ±8 p.p. a.a. em BBDC4). No FHS, o
           log-retorno de cada dia é <code>ln(1+μ)/252 − h/2 + √h·z*</code>, com o mesmo E[S<sub>T</sub>].</li>
+          <li><b>Correção martingal</b> (Duan &amp; Simonato, 1998): no FHS e no bootstrap, cada dia j dos caminhos é multiplicado por
+          <code>(1+μ)^(j/252) ÷ média dos caminhos naquele dia</code> — a média simulada cresce exatamente ao retorno esperado, sem o viés de
+          sorteio nem o da vol variável do GARCH.</li>
           <li><b>Sensibilidade às premissas</b>: o erro de sorteio é desprezível; a incerteza que importa é de premissa. Roda-se uma grade de 9
           cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol {0,6; 1,0; 1,3} × a vol de base (no FHS, a vol prevista para o prazo) —,
           com os mesmos números aleatórios; as faixas dos indicadores mostram o mínimo e o máximo entre eles. As escalas 0,6 e 1,3 são,
@@ -142,6 +145,10 @@ gatilho no dia k        = 1,5 × (CDI acumulado de 0 a k)</span>
           no FHS e no bootstrap, a máxima e a mínima sorteadas junto com o dia; no GBM, a correção de Broadie-Glasserman-Kou, deslocando a
           barreira em 0,5826·σ·√Δt).</li>
           <li>CDI histórico: série diária do BCB; sem ela, usa-se a taxa informada.</li>
+          <li><b>Retorno médio − CDI de hoje</b> (no prazo): quanto a estrutura rende, em média, acima ou abaixo do CDI. No Monte Carlo com
+          retorno esperado = CDI, mede o custo embutido da estrutura.</li>
+          <li><b>Comparar</b>: até 4 estruturas, cada uma com o seu custo, na mesma ação, prazo e premissas; o melhor valor de cada linha fica
+          em negrito (menos P(barreira)). Com intervalos de confiança sobrepostos, a diferença pode ser só ruído.</li>
           <li>Qualidade dos dados: a base é filtrada a cada atualização. Salto isolado de preço com razão de desdobramento (2, 3, 4, 5 ou 10:1)
           é corrigido; outras variações extremas de um dia (queda acima de 30% ou alta acima de 42%), fora de dias de movimento geral, são sinalizadas; e o trecho inicial em que a fonte
           repete o mesmo preço (papel sem negociação) é descartado. Os avisos aparecem abaixo da barra de parâmetros.</li>
