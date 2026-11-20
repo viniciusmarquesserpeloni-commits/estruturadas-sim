@@ -37,16 +37,20 @@ qualquer do passado".
   época de t a t+k). Isso preserva o excesso de retorno da ação sobre o CDI de cada época e o re-ancora nos juros de
   hoje. Sem o ajuste, estruturas com piso ou cupom fixo ficam infladas quando testadas em épocas de CDI baixo (ex.:
   Proteção Total 12m em BBDC4: P(> CDI) de 35% com o CDI da época, 23% com o CDI de hoje).
-- *Intervalo de confiança (IC 95%):* as janelas se sobrepõem (em 3 meses, só ≈ 66 janelas são independentes),
-  então cada probabilidade vem com um IC por *moving block bootstrap*: sorteiam-se blocos de N janelas consecutivas
-  (N = prazo), 1.000 vezes, e tomam-se os percentis 2,5% e 97,5% da média. Ex.: Collar Knock In 3m em BBDC4,
-  P(lucro) = 56% (IC 48%–64%).
+- *Intervalo de confiança (IC 95%):* as janelas se sobrepõem (em 3 meses, são só ≈ 61 janelas não sobrepostas),
+  então cada probabilidade vem com um **intervalo de Wilson** calculado como se houvesse 1,5 × esse número de
+  observações independentes. O fator 1,5 foi calibrado por simulação: com ele o intervalo contém o valor verdadeiro
+  em 94%–97% dos casos (o block bootstrap usado antes ficava em 82%–90%). O intervalo de Wilson também não degenera
+  quando o evento nunca aconteceu: P(perda) = 0% aparece como "0–4%", não "0–0%". Ex.: Collar Knock In 3m em BBDC4,
+  P(lucro) = 57% (IC 47%–67%).
 
 **6. Monte Carlo (complemento).**
 
 - *FHS-GARCH* (padrão; *Filtered Historical Simulation*, Barone-Adesi, Giannopoulos & Vosper, 1999): primeiro
   estima-se a vol de cada dia do histórico por um **GJR-GARCH(1,1)** (ou GARCH(1,1)):
-  h(t+1) = ω + (α + γ·1[ε(t) < 0])·ε(t)² + β·h(t), por máxima verossimilhança gaussiana. Dividindo cada retorno pela
+  h(t+1) = ω + (α + γ·1[ε(t) < 0])·ε(t)² + β·h(t), por máxima verossimilhança gaussiana com **alvo de variância**
+  (a vol de longo prazo fica presa à do próprio histórico e só a dinâmica α, γ, β é estimada — sem isso, um choque
+  extremo ou um dado errado levava a vol de longo prazo a valores absurdos em 1 de cada 6 ações). Dividindo cada retorno pela
   vol do seu dia, obtêm-se os **choques padronizados** z = ε/√h — os "sustos" reais da ação, sem o nível de vol da
   época. A simulação parte da **vol de hoje** e, a cada dia, sorteia um choque z* do histórico (com a máxima e a
   mínima daquele dia, também padronizadas), aplica e = √h·z* e atualiza h pela mesma equação: a vol de cada caminho
@@ -127,6 +131,11 @@ alguns pregões depois (padrão: 1), pelo valor daquele dia. Sem gatilho, a oper
   hoje é desligado (o app avisa).
 - CDI de referência: CDI efetivo do último dia, (1 + CDI diário)^252 − 1, editável.
 - CVaR 5%: média dos 5% piores resultados, ao lado do percentil 5.
+- Qualidade dos dados: a base é filtrada a cada atualização. Salto isolado de preço com razão de desdobramento
+  (2, 3, 4, 5 ou 10:1) é corrigido reescalando o histórico anterior; outras variações extremas de um dia (queda acima
+  de 30% ou alta acima de 42%), fora de dias de movimento geral do mercado, são sinalizadas; e o trecho inicial em
+  que a fonte repete o mesmo preço (papel sem negociação) é descartado. Os avisos aparecem na tela. No app local
+  (Streamlit), sem a referência do mercado, os saltos são só sinalizados.
 
 ### Limitações
 

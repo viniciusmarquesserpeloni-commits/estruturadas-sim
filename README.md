@@ -29,7 +29,8 @@ inicial, tipo de barreira *Knock Up/Down and In/Out* e proporção), e os result
      4.9 Backtest por janelas históricas · 4.10 Monte Carlo · 4.11 Monitoramento intradiário ·
      4.12 Ex-post · 4.13 Métricas · 4.14 Quadro de rentabilidade · 4.15 Precificação teórica ·
      4.16 Solver de custo zero · 4.17 Textos em linguagem simples · 4.18 Saída antecipada ·
-     4.19 Incerteza: intervalos de confiança e cenários · 4.20 Volatilidade condicional (FHS-GARCH) e calibração
+     4.19 Incerteza: intervalos de confiança e cenários · 4.20 Volatilidade condicional (FHS-GARCH) e calibração ·
+     4.21 Correções de novembro de 2026 (dados, alvo de variância, IC de Wilson)
 5. [Presets e fórmulas do payoff](#5-presets-e-fórmulas-do-payoff)
 6. [Módulos: Python, JavaScript e demais linguagens](#6-módulos-python-javascript-e-demais-linguagens)
 7. [Bibliotecas e serviços externos](#7-bibliotecas-e-serviços-externos)
@@ -218,6 +219,8 @@ Exemplo: Proteção Total BBDC4, contratação 19/11/2025, vencimento 25/11/2026
 - Opção de **preço bruto** (sem ajuste).
 - Limpeza: datas normalizadas, duplicatas removidas, preços ≤ 0 descartados; High/Low ausentes viram o Close;
   High ≥ Close ≥ Low é garantido.
+- **Filtro de qualidade** (seção 4.21): saltos de desdobramento não ajustado são corrigidos, variações extremas
+  de um dia são sinalizadas e o trecho inicial sem negociação é cortado.
 - **Volatilidade histórica (padrão do modo Teórico):** desvio-padrão amostral dos log-retornos diários dos
   últimos 252 pregões × √252.
 
@@ -542,12 +545,11 @@ GARCH melhorou a **probabilidade de barreira** (volatilidade é previsível no c
 de calibração da Fase 2 (seção 4.20) refaz esse teste para qualquer estrutura e ação. Por isso a ferramenta
 comunica faixas, não números cravados.
 
-**Histórico — IC 95% por moving block bootstrap.** Para cada indicador 0/1 por janela (lucro, > CDI de hoje,
-perda, barreira, saída antecipada): sorteiam-se blocos de `N` janelas consecutivas (N = prazo, o tamanho da
-sobreposição) até completar a série, 1.000 vezes, e tomam-se os percentis 2,5% e 97,5% da média. Seed fixa e
-gerador **mulberry32 idêntico nos dois motores** ([`estruturadas/rng.py`](estruturadas/rng.py) e `E.rng`), de
-modo que Python e JS dão o mesmo intervalo (testado a 10⁻¹²). Margem típica: ±8 p.p. em 63 pregões (amostra
-efetiva ≈ 66), ±10 p.p. em 126, ±12–15 p.p. em 252. Ex.: Collar KI 3m em BBDC4, P(lucro) = 56% (IC 48%–64%).
+**Histórico — IC 95% de Wilson com amostra efetiva** (desde 20/11/2026; fórmula e cobertura na seção 4.21).
+Para cada indicador 0/1 por janela (lucro, > CDI de hoje, perda, barreira, saída antecipada), o intervalo de
+Wilson é calculado com 1,5 × o número de janelas não sobrepostas. Margem típica: ±10 p.p. em 63 pregões,
+±13 p.p. em 126, ±18 p.p. em 252. A versão anterior usava moving block bootstrap (bloco = N, 1.000 sorteios),
+que em simulação cobria só 82%–90%.
 
 **Monte Carlo — grade de cenários.** Com 10.000 caminhos o erro de sorteio é desprezível; a incerteza que
 importa é de **premissa**. Roda-se uma grade de 9 cenários — retorno esperado {zero, CDI, CDI + prêmio} × vol
@@ -575,8 +577,9 @@ h(t+1) = ω + (α + γ·1[ε(t) < 0])·ε(t)² + β·h(t)          (GARCH(1,1): 
 nos dados o ajuste dá γ ≈ 0 e o modelo vira o GARCH(1,1) — por isso o GJR é o padrão. Estimação por
 **quase-máxima verossimilhança gaussiana** (`−½·Σ[ln h_t + ε_t²/h_t]`, h₀ = variância amostral), com
 **Nelder-Mead determinístico escrito igual nos dois motores**, numa parametrização sem restrições que garante
-ω > 0, α, γ, β ≥ 0 e persistência < 0,999 (`x0`: log da variância de longo prazo; `x1`: logística da persistência;
-`x2`, `x3`: frações de choque e de assimetria). Dois pontos iniciais (persistência 0,97 e 0,90) e reinícios a
+α, γ, β ≥ 0 e persistência < 0,999. Desde 20/11/2026 a estimação usa **alvo de variância** (seção 4.21): a
+variância de longo prazo é a amostral e só a dinâmica é estimada (`x0`: logística da persistência; `x1`, `x2`:
+frações de choque e de assimetria). Dois pontos iniciais (persistência 0,97 e 0,90) e reinícios a
 partir do melhor ponto evitam que o otimizador pare cedo (num caso real, a primeira versão parava na borda
 p = 0,999 e dava vol de longo prazo de 150%); em 80 séries testadas o ajuste coincide com o ótimo do scipy até
 10⁻¹³. Tempo: 0,05–0,9 s em Python e menos no navegador — o site ajusta o GARCH na hora, no Web Worker, para o
@@ -655,6 +658,44 @@ O FHS-GJR supera o bootstrap e, por pouco, o chute fixo; o ganho é pequeno para
 mantido como padrão por incluir o GARCH como caso particular). Como as janelas vizinhas se sobrepõem (≈ 57
 períodos independentes em 3 meses), diferenças pequenas de Brier são ruído — o painel diz isso ao usuário.
 
+### 4.21 Correções de novembro de 2026: dados, alvo de variância e IC de Wilson
+
+A análise crítica em [docs/ANALISE_CRITICA_2026-11.md](docs/ANALISE_CRITICA_2026-11.md) mediu três problemas
+que foram corrigidos (os números das seções 4.19 e 4.20 anteriores a 20/11/2026 são da versão antiga).
+
+**Filtro de qualidade dos dados** (`estruturadas.data.clean_history`, aplicado em `scripts/build_site_data.py`
+e, sem correção automática, no Streamlit). O Yahoo entrega dois tipos de erro que o simulador tratava como
+preço real:
+
+| Problema | Detecção | Tratamento |
+|---|---|---|
+| Salto isolado (evento societário não ajustado) | `\|ln(C_t/C_{t−1})\| > 0,35` num dia em que a mediana do `\|retorno\|` das ações da base ficou abaixo de 5% | razão de preço a 4% de 2, 3, 4, 5 ou 10 → histórico anterior reescalado (ex.: B3SA3 em 09/05/2011, 3:1); senão → sinalizado na tela |
+| Trecho sem negociação (a fonte repete o preço) | fração de pregões com fechamento igual ao anterior **e** máxima = mínima acima de 10% em alguma janela de 252 pregões | o histórico começa depois da última janela ruim (ex.: BBDC4, com março–junho de 2010 inteiros repetidos, passa a começar em 10/03/2011) |
+
+Na base de 13/11/2026: 4 saltos corrigidos, 12 ações com variações extremas sinalizadas e 21 com o início
+cortado. *Racional:* as lâminas ajustam strikes e barreiras em eventos societários, então um desdobramento não
+ajustado é erro de dado, não risco; e dias "parados" reduzem artificialmente a vol e a chance de barreira. Sem a
+referência do mercado do dia nada é corrigido (uma queda real de 50% não pode ser confundida com um 2:1).
+Efeito em B3SA3: o pior retorno do Forward Knock Out de 6 meses passa de −77% para −36%.
+
+**GARCH com alvo de variância.** A variância de longo prazo deixou de ser parâmetro livre: `ω = s²·(1 − p)`,
+com `s²` a variância amostral e `p = α + γ·κ + β` a persistência efetiva (o alvo é reaplicado quatro vezes,
+porque κ muda um pouco quando ω muda). Só a dinâmica (`x0`: persistência; `x1`, `x2`: frações de choque e de
+assimetria) é estimada. Antes, 15 de 94 ações tinham vol de longo prazo absurda (até 1.045%); agora ela é igual
+à amostral em todas, e a calibração das probabilidades ficou igual (barreira +3,3% contra +3,4%). Quando a
+persistência fica ≥ 0,997 (3 ações em 13/11/2026), o painel de vol avisa que o ajuste está no limite.
+
+**IC 95% de Wilson com amostra efetiva.** O block bootstrap percentil cobria 82%–90% em simulação e mostrava
+"0–0%" para eventos que nunca ocorreram. Agora:
+
+```
+n_ef = 1,5 · (nº de janelas) / N                       (1,5 × as janelas não sobrepostas)
+IC   = [ p + z²/2n_ef ± z·√(p(1−p)/n_ef + z²/4n_ef²) ] / (1 + z²/n_ef)        z = 1,96
+```
+
+Cobertura medida: 94%–97% em 3 e 6 meses, conservadora em 12 meses. É fórmula fechada (sem sorteios), idêntica
+nos dois motores. Ex.: Collar KI 3m em BBDC4 (13/11/2026): P(lucro) 57,5% (IC 47%–67%); P(perda) 0% (IC 0%–4%).
+
 ## 5. Presets e fórmulas do payoff
 
 Valores em % do valor inicial (S0 = 1). Nos exemplos com ação, custo das opções = 0.
@@ -691,11 +732,11 @@ Actions), **JSON** (dados, lâminas e fixtures) e **TOML/INI** (configurações)
 | [`legs.py`](estruturadas/legs.py) | Modelo de pernas e estruturas; validação; avaliação vetorizada do payoff em matrizes de caminhos; retornos; perfil no vencimento | `Leg`, `Structure`, `validate`, `summarize_paths`, `event_hits`, `evaluate_paths`, `first_hit_index`, `returns_from_payoff`, `expiry_payoff`, `payoff_profile_summary` |
 | [`presets.py`](estruturadas/presets.py) | 9 estruturas pré-definidas, fórmulas e textos em linguagem simples | `booster`, `collar`, `collar_ki`, `forward_knock_out`, `trava_alta`, `trava_baixa`, `straddle`, `strangle`, `protecao_total_bbdc4`, `PRESETS`, `describe` |
 | [`pricing.py`](estruturadas/pricing.py) | Black-Scholes (escalar e vetorizado); fórmula fechada de barreira; Monte Carlo neutro ao risco com antitéticas e BGK; custo líquido; solver de custo zero | `bs_price`, `bs_price_vec`, `barrier_price`, `gbm_paths`, `make_mc_context`, `mc_price_leg`, `price_structure`, `solve_zero_cost` |
-| [`data.py`](estruturadas/data.py) | Preços (yfinance, CSV), ajuste por proventos, vol histórica, Selic/CDI (API SGS), calendário de pregões | `normalize_ticker`, `load_prices_yf`, `parse_price_csv`, `historical_vol`, `fetch_selic_meta`, `fetch_cdi_daily`, `cdi_factor_on_index`, `b3_holidays`, `previous_business_day`, `count_trading_days`, `term_from_dates` |
+| [`data.py`](estruturadas/data.py) | Preços (yfinance, CSV), ajuste por proventos, filtro de qualidade (saltos e trechos sem negociação), vol histórica, Selic/CDI (API SGS), calendário de pregões | `clean_history`, `market_abs_move`, `stale_start`, `split_ratio`, `normalize_ticker`, `load_prices_yf`, `parse_price_csv`, `historical_vol`, `fetch_selic_meta`, `fetch_cdi_daily`, `cdi_factor_on_index`, `b3_holidays`, `previous_business_day`, `count_trading_days`, `term_from_dates` |
 | [`garch.py`](estruturadas/garch.py) | GARCH(1,1)/GJR-GARCH por quase-máxima verossimilhança (Nelder-Mead igual ao do JS), previsões de vol, painel de vol, caminhos FHS | `fit_garch`, `filtered`, `garch_filter`, `nelder_mead`, `expected_var`, `term_var`, `term_vol`, `vol_panel`, `fhs_drift_daily`, `fhs_paths`, `GarchFit` |
 | [`calibration.py`](estruturadas/calibration.py) | Painel de calibração walk-forward: Brier do modelo × chute fixo, diagrama de confiabilidade | `walk_forward`, `CalibrationResult` (`brier`, `reliability`) |
 | [`backtest.py`](estruturadas/backtest.py) | Janelas históricas (com ajuste ao CDI de hoje), Monte Carlo FHS-GARCH (padrão), bootstrap em blocos com máxima/mínima, GBM, drift controlado, grade de cenários, ex-post | `historical_windows`, `regime_factor`, `run_historical`, `ohlc_log_returns`, `drift_annual`, `bootstrap_ohlc_paths`, `bootstrap_drift_daily`, `gbm_drift_daily`, `run_monte_carlo`, `run_scenarios`, `run_ex_post` |
-| [`metrics.py`](estruturadas/metrics.py) | Estatísticas (com IC por block bootstrap e CVaR), tabela comparativa, quadro de rentabilidade, métricas da saída antecipada | `summarize`, `block_bootstrap_ci`, `cvar`, `comparison_table`, `default_variations`, `profitability_table`, `summarize_exit`, `exit_table`, `exit_by_cdi_regime` |
+| [`metrics.py`](estruturadas/metrics.py) | Estatísticas (com IC de Wilson e CVaR), tabela comparativa, quadro de rentabilidade, métricas da saída antecipada | `summarize`, `wilson_ci`, `effective_sample`, `cvar`, `comparison_table`, `default_variations`, `profitability_table`, `summarize_exit`, `exit_table`, `exit_by_cdi_regime` |
 | [`rng.py`](estruturadas/rng.py) | Gerador mulberry32 idêntico ao do JS (ICs e caminhos FHS iguais nos dois motores), também vetorizado | `Mulberry32`, `uniforms`, `integers` |
 | [`early_exit.py`](estruturadas/early_exit.py) | Saída antecipada: marcação diária a modelo (vol GARCH, móvel ou fixa), calibração, regra do gatilho; histórico, Monte Carlo e ex-post | `EarlyExitConfig`, `structure_value`, `garch_variance`, `rolling_vol`, `cdi_rate_series`, `simulate_exit`, `run_historical_exit`, `run_mc_exit`, `run_ex_post_exit` |
 | [`io.py`](estruturadas/io.py) | Import/export de lâminas em JSON (aceita nomes em pt e en) | `dumps`, `loads`, `save`, `load` |
@@ -742,7 +783,7 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 
 | Arquivo | Linguagem | Função |
 |---|---|---|
-| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py), [`test_garch.py`](tests/test_garch.py) | Python (pytest) | 73 testes do motor Python |
+| [`tests/test_payoffs.py`](tests/test_payoffs.py), [`test_pricing.py`](tests/test_pricing.py), [`test_backtest.py`](tests/test_backtest.py), [`test_early_exit.py`](tests/test_early_exit.py), [`test_conditioning.py`](tests/test_conditioning.py), [`test_garch.py`](tests/test_garch.py), [`test_data_quality.py`](tests/test_data_quality.py) | Python (pytest) | 82 testes do motor Python |
 | [`tests/js/engine.test.mjs`](tests/js/engine.test.mjs) | JavaScript (node:test) | 20 testes do motor JS, incluindo comparação com o Python |
 | [`scripts/pesquisa/`](scripts/pesquisa/) | Python | Experimentos da revisão metodológica (walk-forward, regime de juros) — referência, não produção |
 | [`.github/workflows/pages.yml`](.github/workflows/pages.yml) | YAML | Testes + dados + deploy no GitHub Pages |
@@ -773,7 +814,7 @@ parâmetros). O texto da aba de metodologia vem de [METODOLOGIA.md](METODOLOGIA.
 ## 8. Testes e validação cruzada Python × JS
 
 ```bash
-pytest                                   # 73 testes do motor Python
+pytest                                   # 82 testes do motor Python
 node --test tests/js/engine.test.mjs     # 20 testes do motor JS
 python scripts/make_js_fixtures.py       # regenera as referências após mudar o motor Python
 ```

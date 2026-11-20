@@ -47,9 +47,9 @@ cenários drift × vol, CVaR 5%, bootstrap com máxima/mínima, padrão Collar K
 igual nos dois motores, mesmos caminhos), painel de vol, saída antecipada marcada com a vol do GARCH, painel de
 calibração walk-forward (Brier × chute fixo, diagrama de confiabilidade).
 
-**Análise crítica (15/11/2026):** `docs/ANALISE_CRITICA_2026-11.md` — pendências medidas e ainda não corrigidas:
-filtro de erros de dados do Yahoo, GARCH com alvo de variância, IC de Wilson (o atual cobre 82%–90%), média dos
-três métodos de MC como número principal, grade de vol 0,6/1,0/1,3.
+**Análise crítica (15/11/2026):** `docs/ANALISE_CRITICA_2026-11.md`. Corrigido em 20/11/2026 (prioridade 1): filtro
+de erros de dados do Yahoo, GARCH com alvo de variância, IC de Wilson. Pendente (prioridade 2): média dos três
+métodos de MC como número principal, grade de vol 0,6/1,0/1,3, significância no painel de calibração.
 
 **Números de referência (Proteção Total BBDC4, 19/11/2025 → 25/11/2026, 249 pregões):** quadro 4,10 / 6,10 /
 42,00 / 57,00% (lâmina arredonda 42/57) · histórico: P(lucro) 100%, P(>CDI) 35%, barreira 27,5% · saída
@@ -57,7 +57,7 @@ antecipada: histórico 69% (dia mediano 62), MC 22% (dia 224) · operação real
 22/10/2026.
 
 **Estado:** no GitHub até `7de331d`; o commit de docs `0cfa942` e a Fase 2 estão só locais até o usuário autorizar o push (conferir
-`git log origin/main..`). Testes: 73 pytest + 20 node. Guia em PDF pronto em `docs/guia/` (gerado por
+`git log origin/main..`). Testes: 82 pytest + 20 node. Guia em PDF pronto em `docs/guia/` (gerado por
 `scripts/guia/`; PDF/imagens fora do git até o usuário autorizar). Mercado: Ibovespa −13,9% em 26/10/2026 (vol muito alta). Pendências do usuário: ativar 2FA no GitHub até 23/11/2026; descobrir o spread real de saída.
 
 **Comandos:** `.venv/Scripts/python -m pytest -q` · `node --test tests/js/engine.test.mjs` ·

@@ -5,7 +5,7 @@
 > as decisões já tomadas, o estado atual e as armadilhas conhecidas. Detalhes de cálculo estão no
 > [README](../README.md); a metodologia em linguagem de usuário, em [METODOLOGIA.md](../METODOLOGIA.md).
 >
-> Última atualização: 15/11/2026 (Fases 1 e 2 da revisão, guia em PDF e análise crítica de novembro).
+> Última atualização: 20/11/2026 (Fases 1 e 2 da revisão, guia em PDF, análise crítica e correções de novembro).
 
 ## 1. Quem é o usuário e como trabalhar com ele
 
@@ -101,7 +101,7 @@
   - `e5e97a6` estrutura inicial · `bae8245` motor de payoff + presets · `27faaee` precificação ·
     `7980c97` dados/backtest/métricas · `8c18b52` fix pandas 3 · `c12226f` app Streamlit · `217b8b7` README ·
     `5c49e4a` motor JS · `218b596` site estático + workflow.
-- **Testes:** 73 pytest + 20 node, todos passando.
+- **Testes:** 82 pytest + 20 node, todos passando.
 - **Deploy:** GitHub Pages ativo com *Source: GitHub Actions*; primeiro deploy (run 39344983819) passou em todas
   as etapas; site conferido no ar (BBDC4/Proteção Total: 3.924 janelas, P(lucro) 100%, P>CDI 35,07%, barreira
   acionada 27,55%, ex-post +23,42% até 19/10/2026).
@@ -133,9 +133,23 @@
   erros de dados do Yahoo não filtrados (saltos de 2–3× em B3SA3, PCAR3, NATU3, UGPA3, COGN3; preço parado em
   PCAR3, SUZB3, TEND3, BHIA3…); GARCH degenerado em 15 de 94 ações; "IC 95%" cobre 82%–90%; grade de vol
   ×0,8–×1,2 cobre 46% dos desfechos; FHS-GJR só ganha do chute fixo em > CDI e barreira (t ≈ 2,2–2,4) e empata
-  num evento só de vol; a média FHS + bootstrap + GBM ganha nos dois. **Nenhuma correção foi implementada**:
-  as recomendações (seção 6 do relatório) aguardam decisão do usuário. Lição: escolher modelo pela calibração do
+  num evento só de vol; a média FHS + bootstrap + GBM ganha nos dois. Lição: escolher modelo pela calibração do
   evento, não pela previsão de variância (a variante de retornos limitados é a melhor em QLIKE e a pior no Brier).
+- **Correções de prioridade 1 (20/11/2026, aval do usuário "Sim, prioridade 1"; README seção 4.21):**
+  - **filtro de dados** `estruturadas.data.clean_history`, aplicado em `build_site_data.py`: salto > 35% num dia
+    calmo do mercado (mediana do |retorno| < 5%) com razão 2/3/4/5/10 → histórico anterior reescalado; outros →
+    sinalizados; trecho inicial com > 10% de dias parados (fechamento repetido e máxima = mínima) em 252 pregões →
+    cortado. Avisos no `index.json` (campo `av`: `c` corrigidos, `a` atípicos, `ini` início original) e na linha
+    de status do site; no Streamlit, sem referência de mercado, só sinaliza. Base de 13/11/2026: 4 saltos
+    corrigidos (B3SA3, EQTL3, NATU3, PCAR3), 12 ações com atípicos, 21 com início cortado (BBDC4 passa a começar em
+    10/03/2011; março–junho de 2010 estavam repetidos no Yahoo);
+  - **GARCH com alvo de variância** nos dois motores: ω = s²·(1 − p efetiva), alvo reaplicado 4×; parâmetros
+    irrestritos agora são 2 (GARCH) ou 3 (GJR); `at_limit`/`atLimit` (persistência ≥ 0,997) gera aviso no painel de
+    vol (3 ações em 13/11/2026: CPFE3, HAPV3, UGPA3);
+  - **IC de Wilson** com amostra efetiva 1,5 × n/N (`wilson_ci`, `effective_sample` / `E.wilsonCi`,
+    `E.effectiveSample`), no lugar do block bootstrap; `block_bootstrap_ci` e `E.blockBootstrapCi` foram removidos.
+  - Prioridades 2 e 3 do relatório continuam pendentes (média dos três métodos de MC, grade de vol 0,6/1,0/1,3,
+    significância no painel de calibração…).
 - **Bug antigo corrigido (desde `218b596`):** todas as páginas do site usam o mesmo `#view`; uma página já visitada
   continuava "viva" e se redesenhava por cima da atual a cada recálculo (e trocar a estrutura fora da aba Estrutura
   dava erro). Agora o roteador guarda `App.route` e cada página só se atualiza se for a rota atual.
@@ -215,6 +229,7 @@ Para acompanhar um deploy sem o `gh`:
 | API SGS do BCB limita séries diárias a 10 anos por consulta | download do CDI em blocos de 5 anos |
 | `node --test tests/js/` (pasta) falha no Windows | rodar o arquivo `tests/js/engine.test.mjs` |
 | RNG do Python (PCG64) ≠ JS (mulberry32) | bootstrap/GBM comparam só estatisticamente; o FHS usa o mulberry32 vetorizado nos dois e dá os mesmos caminhos |
+| Dados do Yahoo com desdobramento não ajustado ou preço repetido por meses | `clean_history` no build do site (README 4.21); conferir os avisos no `index.json` a cada atualização |
 | Nelder-Mead parava na borda p = 0,999 (vol de longo prazo 150%) | passo 0,25, 2 pontos iniciais e reinícios; teste contra o scipy |
 | `math.exp` estoura no Python (o JS devolve Infinity) | `_exp` com OverflowError → inf no `garch.py` |
 | Fixtures antigas da saída antecipada passaram a usar o GARCH (novo padrão) e divergiam por 1e-9 | casos antigos fixados em `vol_mode="rolling"`; o GARCH tem fixtures próprios com os parâmetros do Python |

@@ -41,15 +41,17 @@ só com opções:   retorno = valor final / c − 1   (exige c &gt; 0)</span>
           <li><b>Ajuste ao CDI de hoje</b> (padrão): cada caminho é multiplicado por <code>(1 + CDI hoje)^(k/252) ÷ CDI acumulado da época</code>.
           Preserva o excesso de retorno da ação sobre o CDI de cada época e o re-ancora nos juros de hoje. Sem ele, estruturas com piso ou cupom
           fixo ficam infladas em épocas de CDI baixo (Proteção Total 12m em BBDC4: P(&gt; CDI) de 35% com o CDI da época, 23% com o de hoje).</li>
-          <li><b>Intervalo de confiança (IC 95%)</b>: em 3 meses só ≈ 66 janelas são independentes, então cada probabilidade vem com um IC por
-          <i>moving block bootstrap</i> (blocos de N janelas consecutivas, 1.000 sorteios, percentis 2,5% e 97,5%). Ex.: Collar Knock In 3m em
-          BBDC4, P(lucro) = 56% (IC 48%–64%).</li>
+          <li><b>Intervalo de confiança (IC 95%)</b>: em 3 meses são só ≈ 61 janelas não sobrepostas, então cada probabilidade vem com um
+          <b>intervalo de Wilson</b> calculado como se houvesse 1,5 × esse número de observações independentes. O fator foi calibrado por simulação:
+          com ele o intervalo contém o valor verdadeiro em 94%–97% dos casos (o block bootstrap usado antes ficava em 82%–90%). Também não degenera
+          quando o evento nunca aconteceu: P(perda) = 0% aparece como "0–4%". Ex.: Collar Knock In 3m em BBDC4, P(lucro) = 57% (IC 47%–67%).</li>
         </ul>
 
         <h3>5. Monte Carlo (complemento)</h3>
         <ul>
           <li><b>FHS-GARCH</b> (padrão; <i>Filtered Historical Simulation</i>, Barone-Adesi, Giannopoulos &amp; Vosper, 1999): estima-se a vol de
-          cada dia do histórico por um <b>GJR-GARCH(1,1)</b> (ou GARCH(1,1)), por máxima verossimilhança gaussiana; dividindo cada retorno pela vol
+          cada dia do histórico por um <b>GJR-GARCH(1,1)</b> (ou GARCH(1,1)), por máxima verossimilhança gaussiana com <b>alvo de variância</b>
+          (a vol de longo prazo fica presa à do próprio histórico; só a dinâmica é estimada); dividindo cada retorno pela vol
           do seu dia, obtêm-se os <b>choques padronizados</b> — os "sustos" reais da ação, sem o nível de vol da época. A simulação parte da
           <b>vol de hoje</b> e, a cada dia, sorteia um choque do histórico (com a máxima e a mínima daquele dia, também padronizadas) e atualiza
           a vol pela mesma equação: cada caminho reage aos próprios choques e volta à média de longo prazo no ritmo da meia-vida. No GJR, quedas
@@ -130,6 +132,9 @@ gatilho no dia k        = 1,5 × (CDI acumulado de 0 a k)</span>
           no FHS e no bootstrap, a máxima e a mínima sorteadas junto com o dia; no GBM, a correção de Broadie-Glasserman-Kou, deslocando a
           barreira em 0,5826·σ·√Δt).</li>
           <li>CDI histórico: série diária do BCB; sem ela, usa-se a taxa informada.</li>
+          <li>Qualidade dos dados: a base é filtrada a cada atualização. Salto isolado de preço com razão de desdobramento (2, 3, 4, 5 ou 10:1)
+          é corrigido; outras variações extremas de um dia (queda acima de 30% ou alta acima de 42%), fora de dias de movimento geral, são sinalizadas; e o trecho inicial em que a fonte
+          repete o mesmo preço (papel sem negociação) é descartado. Os avisos aparecem abaixo da barra de parâmetros.</li>
         </ul>
 
         <h3>Limitações</h3>

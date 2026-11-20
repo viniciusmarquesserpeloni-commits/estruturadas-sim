@@ -3,7 +3,9 @@
 > Feita em 15/11/2026 (Claude Fable 5.2), com os dados publicados pelo site até 13/11/2026.
 > Pergunta do autor: *o projeto cumpre os objetivos estabelecidos e usa as melhores métricas estatísticas para
 > simular?* Todos os números abaixo saem de testes reproduzíveis em `scripts/pesquisa/exp4…exp9` (seção 7).
-> Nada no simulador foi alterado por esta análise.
+> A análise em si não alterou o simulador. **Atualização de 20/11/2026:** as três correções de prioridade 1
+> (seção 6) foram implementadas depois, a pedido do autor — filtro de dados, GARCH com alvo de variância e IC de
+> Wilson; ver README, seção 4.21. Os números abaixo são os de antes das correções.
 
 ## 1. Resumo
 
@@ -237,7 +239,7 @@ desfechos de vol. Uma grade de **0,6× / 1,0× / 1,3×** (≈ percentis 10 e 90 
 
 ## 6. Recomendações, em ordem
 
-**Prioridade 1 — corrigem erro (baixo risco, validado nos testes):**
+**Prioridade 1 — corrigem erro (baixo risco, validado nos testes) — implementadas em 20/11/2026:**
 
 1. **Filtro de dados em `scripts/build_site_data.py`.** (a) Detectar salto isolado: |retorno| > 35% num dia em
    que a mediana do mercado se moveu menos de 5%; se a razão for ≈ 2, 3, ½ ou ⅓ (ou o preço ficar parado em
